@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "geer"
-version = "0.0.0"
+version = "0.1.0"
 description = "Free, private, and open source coding agent that challenges the frontier"
 readme = "README.md"
 requires-python = ">=3.11"

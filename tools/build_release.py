@@ -29,17 +29,37 @@ class BuildError(RuntimeError):
     """Raised when a release artifact cannot be built safely."""
 
 
-def run(command: list[str], *, cwd: Path = ROOT) -> None:
-    print("+", " ".join(command))
+def run(
+    command: list[str],
+    *,
+    cwd: Path = ROOT,
+    redact: tuple[str, ...] = (),
+) -> None:
+    display = ["<redacted>" if argument in redact else argument for argument in command]
+    print("+", " ".join(display))
     try:
-        subprocess.run(
+        result = subprocess.run(
             command,
             cwd=cwd,
             check=True,
             env={**os.environ, "COPYFILE_DISABLE": "1"},
+            capture_output=bool(redact),
+            text=bool(redact),
         )
+        if redact:
+            output = (result.stdout or "") + (result.stderr or "")
+            for value in redact:
+                output = output.replace(value, "<redacted>")
+            if output:
+                print(output, end="" if output.endswith("\n") else "\n")
     except (OSError, subprocess.CalledProcessError) as error:
-        raise BuildError(f"command failed: {' '.join(command)}") from error
+        if isinstance(error, subprocess.CalledProcessError) and redact:
+            output = (error.stdout or "") + (error.stderr or "")
+            for value in redact:
+                output = output.replace(value, "<redacted>")
+            if output:
+                print(output, end="" if output.endswith("\n") else "\n")
+        raise BuildError(f"command failed: {' '.join(display)}") from error
 
 
 def project_version() -> str:
@@ -177,7 +197,8 @@ def build_setup_app(payload: Path, version: str, identity: str | None) -> None:
                 "--sign",
                 identity,
                 str(app),
-            ]
+            ],
+            redact=(identity,),
         )
 
 
@@ -222,7 +243,7 @@ def build_runtime(payload: Path, identity: str | None) -> None:
             "--osx-entitlements-file",
             str(ROOT / "packaging/entitlements.plist"),
         ]
-    run(pyinstaller)
+    run(pyinstaller, redact=(identity,) if identity else ())
     source = BUILD / "pyinstaller-dist/geer"
     destination = payload / RUNTIME_ROOT
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -356,7 +377,7 @@ def package(
     if identity:
         command.extend(("--sign", identity))
     command.append(str(output))
-    run(command)
+    run(command, redact=(identity,) if identity else ())
 
 
 def verify_package_metadata(output: Path) -> None:
@@ -434,7 +455,8 @@ def main(argv: list[str] | None = None) -> int:
                 "--keychain-profile",
                 options.notary_profile,
                 "--wait",
-            ]
+            ],
+            redact=(options.notary_profile,),
         )
         run(["xcrun", "stapler", "staple", str(output)])
         run(["spctl", "--assess", "--type", "install", "--verbose=2", str(output)])

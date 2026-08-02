@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 
+from geer import __version__
 from geer.cli import _confirm_t3_remove, normalize_arguments, parser
 from geer.onboarding import SetupError
 
@@ -76,7 +77,7 @@ def test_version_is_public(capsys: pytest.CaptureFixture[str]) -> None:
     with pytest.raises(SystemExit, match="0"):
         parser().parse_args(["--version"])
 
-    assert capsys.readouterr().out == "geer 0.0.0\n"
+    assert capsys.readouterr().out == f"geer {__version__}\n"
 
 
 def test_t3_remove_requires_explicit_noninteractive_consent(
