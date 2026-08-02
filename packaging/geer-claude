@@ -1,0 +1,8 @@
+#!/bin/sh
+set -eu
+
+if test "$#" -eq 1 && test "$1" = "--version"; then
+  exec /usr/local/bin/geer claude --version
+fi
+
+exec /usr/local/bin/geer launch "$@"
