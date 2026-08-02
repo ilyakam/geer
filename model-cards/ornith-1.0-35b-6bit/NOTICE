@@ -1,0 +1,23 @@
+Geer Ornith 1.0 35B-A3B (6-bit MLX)
+
+This artifact is a 6-bit MLX conversion produced by the Geer project from:
+
+  deepreinforce-ai/Ornith-1.0-35B
+  Revision: 5df2ed3f675c7beaa490328cc70bb573b65fb660
+  Authors: DeepReinforce Team
+  Upstream model card: https://huggingface.co/deepreinforce-ai/Ornith-1.0-35B
+
+The upstream model card declares the model MIT licensed and states that
+Ornith-1.0-35B was post-trained on Qwen 3.5.
+
+Qwen 3.5 is Copyright 2026 Alibaba Cloud and is licensed under the Apache
+License, Version 2.0. The license text is included as LICENSE-QWEN.
+
+Conversion recipe, tensor-layout transformation, manifests, and model-card
+additions are provided by the Geer project:
+
+  Copyright (c) 2026 Ilya Kaminsky
+  https://github.com/ilyakam/geer
+
+All third-party names and marks belong to their respective owners. Geer is not
+affiliated with or endorsed by Deep Reinforce AI or Alibaba Cloud.
