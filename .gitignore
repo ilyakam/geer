@@ -1,0 +1,25 @@
+# AI
+ai-refs/
+
+# Local runtime
+.geer/
+
+# Local installation-test automation
+scripts/
+
+# Environment variables
+.dev.vars
+.env
+.env.production
+
+# Python
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+.venv/
+__pycache__/
+*.py[cod]
+
+# macOS
+.DS_Store

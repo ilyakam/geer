@@ -1,0 +1,12 @@
+#!/bin/sh
+set -eu
+
+app_root="/Library/Application Support/Geer/app"
+runtime_root="$app_root/runtime/geer"
+
+export GEER_WORKSPACE="$app_root"
+export GEER_HOME="${GEER_HOME:-$HOME/.geer}"
+export GEER_CLI="/usr/local/bin/geer"
+export GEER_CLAUDE_LAUNCHER="/usr/local/bin/geer-claude"
+
+exec "$runtime_root/geer" "$@"

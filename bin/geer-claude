@@ -1,0 +1,22 @@
+#!/bin/sh
+set -eu
+
+script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+repo_dir=$(dirname -- "$script_dir")
+export GEER_WORKSPACE="$repo_dir"
+
+geer_command=launch
+if test "$#" -eq 1 && test "$1" = "--version"; then
+  geer_command=claude
+fi
+
+if test -x "$repo_dir/.venv/bin/geer"; then
+  exec "$repo_dir/.venv/bin/geer" "$geer_command" "$@"
+fi
+
+if command -v uv >/dev/null 2>&1; then
+  exec uv run --project "$repo_dir" geer "$geer_command" "$@"
+fi
+
+echo "Geer requires uv. Install it, then run 'uv sync' in $repo_dir." >&2
+exit 127

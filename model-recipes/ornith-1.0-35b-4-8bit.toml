@@ -1,0 +1,32 @@
+schema_version = 1
+id = "ornith-1.0-35b-4-8bit"
+display_name = "Geer Ornith 1.0 35B-A3B (4/8-bit MLX)"
+
+[source]
+repo_id = "deepreinforce-ai/Ornith-1.0-35B"
+revision = "5df2ed3f675c7beaa490328cc70bb573b65fb660"
+expected_bytes = 70250400102
+license = "MIT"
+license_evidence_url = "https://huggingface.co/deepreinforce-ai/Ornith-1.0-35B/blob/5df2ed3f675c7beaa490328cc70bb573b65fb660/README.md"
+
+[conversion]
+transform = "qwen3_5_moe_unfused_experts"
+dtype = "bfloat16"
+mlx = "0.32.0"
+mlx_lm = "0.31.3"
+mlx_vlm = "0.6.3"
+huggingface_hub = "1.24.0"
+hf_xet = "1.5.2"
+safetensors = "0.8.0"
+
+[quantization]
+enabled = true
+strategy = "routed_experts_4bit_protected_text_8bit"
+mode = "affine"
+bits = 4
+high_bits = 8
+group_size = 64
+
+[output]
+expected_architecture = "qwen3_5_moe"
+preserve_multimodal = true

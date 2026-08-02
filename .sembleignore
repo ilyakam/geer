@@ -1,0 +1,3 @@
+# Local research stays untracked but is intentionally available to local agents.
+!ai-refs/
+!ai-refs/**
