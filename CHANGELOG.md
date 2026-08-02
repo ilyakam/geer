@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-08-02
+
 ### Added
 
 - Native, resumable Geer Setup window with structured consent, progress,
@@ -39,3 +41,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Diagnostics and tests for install, tool use, rollback, and reboot.
 - End-to-end onboarding validation in an isolated macOS account.
 - Contributor documentation, licensing, and Geer artwork.
+
+[Unreleased]: https://github.com/ilyakam/geer/compare/0.1.0...HEAD
+[0.1.0]: https://github.com/ilyakam/geer/releases/tag/0.1.0
