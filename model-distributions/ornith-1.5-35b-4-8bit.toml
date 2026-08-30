@@ -1,0 +1,7 @@
+schema_version = 1
+recipe = "ornith-1.5-35b-4-8bit"
+repo_id = "ilyakam/Geer-Ornith-1.5-35B-A3B-4-8bit-MLX"
+revision = "03a2eeaa494beb6a44aaca3695473ab2ede47837"
+tag = "2026-08-20"
+expected_bytes = 21644076559
+model_card_dir = "../model-cards/ornith-1.5-35b-4-8bit"

@@ -36,11 +36,11 @@ def fake_model_installer(tmp_path: Path) -> SimpleNamespace:
 @pytest.mark.parametrize(
     ("memory_gib", "recipe_name"),
     (
-        (32, "ornith-1.0-35b-4-8bit.toml"),
-        (48, "ornith-1.0-35b-4-8bit.toml"),
-        (64, "ornith-1.0-35b-6bit.toml"),
-        (96, "ornith-1.0-35b-6bit.toml"),
-        (128, "ornith-1.0-35b-6bit.toml"),
+        (32, "ornith-1.5-35b-4-8bit.toml"),
+        (48, "ornith-1.5-35b-4-8bit.toml"),
+        (64, "ornith-1.5-35b-6bit.toml"),
+        (96, "ornith-1.5-35b-6bit.toml"),
+        (128, "ornith-1.5-35b-6bit.toml"),
     ),
 )
 def test_recipe_selection_follows_the_hardware_profile(
@@ -98,7 +98,7 @@ def test_model_plan_reuses_only_the_selected_recipe(
     active_model = tmp_path / "active-model"
     active_model.mkdir()
     (active_model / "geer-build-manifest.json").write_text(
-        json.dumps({"recipe": "ornith-1.0-35b-6bit"})
+        json.dumps({"recipe": "ornith-1.5-35b-6bit"})
     )
     active = tmp_path / "home/models/active"
     active.parent.mkdir(parents=True)

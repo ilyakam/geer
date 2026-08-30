@@ -18,17 +18,17 @@ from .runtime import (
 
 MODEL_PROFILE = "ornith"
 MODEL_RECIPES = {
-    "6bit": "ornith-1.0-35b-6bit.toml",
-    "4-8bit": "ornith-1.0-35b-4-8bit.toml",
+    "6bit": "ornith-1.5-35b-6bit.toml",
+    "4-8bit": "ornith-1.5-35b-4-8bit.toml",
 }
 MODEL_NAMES = {
     MODEL_PROFILE,
-    "ornith-1.0-35b-6bit",
-    "ornith-1.0-35b-4-8bit",
-    "Geer Ornith 1.0 35B-A3B (6-bit MLX)",
-    "Geer Ornith 1.0 35B-A3B (4/8-bit MLX)",
-    "ilyakam/Geer-Ornith-1.0-35B-A3B-6bit-MLX",
-    "ilyakam/Geer-Ornith-1.0-35B-A3B-4-8bit-MLX",
+    "ornith-1.5-35b-6bit",
+    "ornith-1.5-35b-4-8bit",
+    "Geer Ornith 1.5 35B-A3B (6-bit MLX)",
+    "Geer Ornith 1.5 35B-A3B (4/8-bit MLX)",
+    "ilyakam/Geer-Ornith-1.5-35B-A3B-6bit-MLX",
+    "ilyakam/Geer-Ornith-1.5-35B-A3B-4-8bit-MLX",
 }
 TEMPORARY_SPACE_BYTES = 2 * 1024**3
 
@@ -78,6 +78,8 @@ def model_plan(
     distribution = recipe.distribution
     installed_bytes = int(distribution["expected_bytes"])
     cache = installer.default_cache_dir()
+    active = installer.geer_home() / "models" / "active"
+    active_model_installed = active.is_symlink() and active.exists()
     return {
         "profile": MODEL_PROFILE,
         "hardware_profile": hardware_profile.id,
@@ -110,6 +112,7 @@ def model_plan(
         "context_window_human": f"{hardware_profile.max_context_window // 1024}K tokens",
         "kv_cache": hardware_profile.kv_cache,
         "reusable_active_model": _reusable_active_model(installer, recipe),
+        "active_model_installed": active_model_installed,
         "cache_dir": str(cache),
         "active_link": str(installer.geer_home() / "models" / "active"),
     }

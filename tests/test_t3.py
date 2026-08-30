@@ -69,6 +69,11 @@ def test_configure_t3_is_additive_and_creates_private_backup(
     client_settings_path.write_text(
         json.dumps(
             {
+                "favorites": [
+                    {"provider": "codex", "model": "gpt-5.6-sol"},
+                    {"provider": PROVIDER_ID, "model": RETIRED_GEER_MODELS[0]},
+                    {"provider": PROVIDER_ID, "model": RETIRED_GEER_MODELS[3]},
+                ],
                 "providerModelPreferences": {
                     "codex": {
                         "hiddenModels": ["old-codex"],
@@ -99,6 +104,11 @@ def test_configure_t3_is_additive_and_creates_private_backup(
         "hiddenModels": [*T3_CLAUDE_BUILT_IN_MODELS, *RETIRED_GEER_MODELS],
         "modelOrder": [alias],
     }
+    assert client_settings["favorites"] == [
+        {"provider": "codex", "model": "gpt-5.6-sol"},
+        {"provider": PROVIDER_ID, "model": alias},
+    ]
+    assert result["favorites_migrated"] == 2
     settings_backup = Path(result["backups"]["settings.json"])
     client_backup = Path(result["backups"]["client-settings.json"])
     cache_backup = Path(result["backups"][f"{PROVIDER_ID}.json"])

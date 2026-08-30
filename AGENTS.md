@@ -37,8 +37,7 @@ The engine records its authenticated loopback endpoint and launcher diagnostics
 under `~/.geer/state`; lifecycle commands must discover that endpoint instead
 of assuming a fixed port.
 
-`models/ornith-1.0-35b-a3b-6bit-mlx` is an optional, non-updating Git submodule
-pointing to the published model repository. Runtime installation uses the
+Model weights are not tracked as Git submodules. Runtime installation uses the
 revision in `model-distributions/`, while `model-recipes/` and `model-cards/`
 preserve the conversion recipe, licenses, notices, and provenance.
 

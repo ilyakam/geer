@@ -1,0 +1,27 @@
+Geer Ornith 1.5 35B-A3B (4/8-bit MLX)
+
+This artifact is a mixed 4/8-bit MLX conversion produced by the Geer project
+from:
+
+  ornith-ai/Ornith-1.5-35B-A3B
+  Revision: e4dfb35a93d4b6822a811a7676f3488514abe7e2
+  Upstream model card: https://huggingface.co/ornith-ai/Ornith-1.5-35B-A3B
+
+The pinned upstream model card declares the model MIT licensed and links to a
+LICENSE file, but the pinned snapshot does not include that file. The exact
+upstream license text and any inherited component obligations must be confirmed
+before redistribution.
+
+The upstream card describes Ornith-1.5 as extending Ornith-1.0, which it says
+was developed on Qwen3.5 and Gemma4. The Qwen Apache notice is included as
+LICENSE-QWEN; this notice does not resolve any additional upstream obligations.
+
+Conversion recipe, tensor-layout transformation, manifests, and model-card
+additions are provided by the Geer project:
+
+  Copyright (c) 2026 Ilya Kaminsky
+  https://github.com/ilyakam/geer
+
+All third-party names and marks belong to their respective owners. Geer is not
+affiliated with or endorsed by Ornith AI, Deep Reinforce, Alibaba Cloud, or
+Google.
