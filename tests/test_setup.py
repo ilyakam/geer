@@ -284,3 +284,48 @@ def test_setup_downloads_before_deferring_missing_integrations(
     assert "geer integration add t3" in output
     assert result["status"] == "ready"
     assert setup_complete(Workspace(tmp_path)) is True
+
+
+def test_setup_upgrades_retained_model_without_continue_prompt(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    class ReachedRuntime(Exception):
+        pass
+
+    monkeypatch.setattr("geer.onboarding.platform.system", lambda: "Darwin")
+    monkeypatch.setattr("geer.onboarding.platform.machine", lambda: "arm64")
+    monkeypatch.setattr("geer.onboarding.memory_bytes", lambda: 48 * 1024**3)
+    monkeypatch.setattr(
+        "geer.onboarding.prerequisite_snapshot",
+        lambda: {"claude": Prerequisite(False), "t3": Prerequisite(False)},
+    )
+    monkeypatch.setattr(
+        "geer.onboarding.model_plan",
+        lambda workspace, **kwargs: {
+            "display_name": "Geer Ornith 1.5 35B-A3B (4/8-bit MLX)",
+            "download_human": "1.0 GiB",
+            "runtime_download_human": "300.0 MiB",
+            "runtime_installed_human": "1.0 GiB",
+            "temporary_human": "2.0 GiB",
+            "required_free_human": "2.0 GiB",
+            "active_link": "~/.geer/models/active",
+            "active_model_installed": True,
+            "reusable_active_model": False,
+        },
+    )
+
+    def reject_prompt(*args: object, **kwargs: object) -> bool:
+        raise AssertionError("the retained-model upgrade must not prompt")
+
+    def stop_after_upgrade_notice(workspace: Workspace) -> None:
+        raise ReachedRuntime
+
+    monkeypatch.setattr("geer.onboarding.confirm", reject_prompt)
+    monkeypatch.setattr("geer.onboarding.bootstrap_runtime", stop_after_upgrade_notice)
+
+    with pytest.raises(ReachedRuntime):
+        setup(Workspace(tmp_path))
+
+    assert "upgrade it to the latest Geer Ornith 1.5" in capsys.readouterr().out

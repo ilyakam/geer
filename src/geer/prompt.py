@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 DEFAULT_MODEL_NAME = (
-    "Ornith-1.0-35B (post-trained on top of Gemma 4 and Qwen 3.5)"
+    "Ornith-1.5-35B-A3B"
 )
 DEFAULT_INTERFACE = "T3 Code"
 DEFAULT_HARNESS = "Claude Code"

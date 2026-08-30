@@ -446,7 +446,15 @@ def _setup(
         raise SetupError("Geer currently requires an Apple Silicon Mac")
     if plan_only:
         return {"status": "planned", "plan": plan}
-    if not confirm("Continue?", default_yes=True, assume_yes=assume_yes):
+    automatic_upgrade = plan.get("active_model_installed") and not plan[
+        "reusable_active_model"
+    ]
+    if automatic_upgrade:
+        print(
+            "\nAn older Geer model is installed. Geer will upgrade it to the "
+            f"latest {plan['display_name']} automatically."
+        )
+    elif not confirm("Continue?", default_yes=True, assume_yes=assume_yes):
         return {"status": "cancelled"}
 
     _phase("runtime", "Preparing Geer runtime", 1, 5)

@@ -12,7 +12,7 @@ model, provides repository retrieval, and records content-free performance
 metrics.
 
 Geer selects between reproducible 6-bit and mixed 4/8-bit MLX conversions of
-the MIT-licensed upstream Ornith model according to the Mac's unified memory.
+the MIT-licensed upstream Ornith 1.5 model according to the Mac's unified memory.
 The independently converted weights are distributed through the
 [Geer models on Hugging Face](https://huggingface.co/ilyakam/models) and remain
 outside the Git checkout.
@@ -32,6 +32,9 @@ recovery path. Setup checks the Mac, shows the exact
 model, runtime, temporary, and total disk commitment, and asks before
 downloading anything. It continues if Claude Code or T3 Code is absent, shows
 their installation instructions, and checks again after the model download.
+When a retained Ornith 1.0 model is found, setup upgrades it to Ornith 1.5
+automatically and removes the retired conversion after the new model passes
+verification.
 
 If the setup window was closed, relaunch it from the installed application
 files or resume from any terminal with:
@@ -77,9 +80,9 @@ geer integration add t3
 geer integration remove t3
 ```
 
-The T3 Code integration adds a **Geer** provider containing the Ornith model
-selected for the Mac. Its provider starts the loopback-only local engine when
-needed. Geer supplies Claude Code with a Geer-owned system prompt describing
+The T3 Code integration adds a **Geer** provider containing the Ornith 1.5
+model selected for the Mac. Its provider starts the loopback-only local engine
+when needed. Geer supplies Claude Code with a Geer-owned system prompt describing
 the active model, interface, and harness without adopting the harness identity.
 User-installed Claude Code skills remain available as slash commands without
 being copied into Geer. Geer links the user's `~/.claude/skills` directory into
@@ -97,8 +100,8 @@ selects the model before showing the download plan:
 - 32 GB: mixed 4/8-bit weights, 64K context, BF16 KV cache.
 
 Setup reuses the selected model only after verifying it against that model's
-pinned conversion manifest. A different retained model is left in the shared
-Hugging Face cache while the correct model is downloaded and activated.
+pinned conversion manifest. A retained Ornith 1.0 model is replaced by the
+verified Ornith 1.5 conversion instead of being kept as an installed rollback.
 
 `geer uninstall` stops the local server, removes the Geer integration from T3
 Code, and deletes the packaged CLI and application files. It leaves

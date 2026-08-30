@@ -1,4 +1,0 @@
-[submodule "models/ornith-1.0-35b-a3b-6bit-mlx"]
-	path = models/ornith-1.0-35b-a3b-6bit-mlx
-	url = https://huggingface.co/ilyakam/Geer-Ornith-1.0-35B-A3B-6bit-MLX
-	update = none

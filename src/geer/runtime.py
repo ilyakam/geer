@@ -18,7 +18,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, NoReturn
 
-from .assets import AssetError, Workspace, model_alias, verify_assets
+from .assets import DEFAULT_MODEL_ID, AssetError, Workspace, model_alias, verify_assets
 from .hardware import select_hardware_profile
 from .prompt import geer_system_prompt
 from .retrieval import retrieval_arguments, retrieval_status
@@ -392,11 +392,19 @@ def serve_command(
         raise AssetError("the proof-of-concept server must bind to loopback")
     if not 1 <= port <= 65535:
         raise AssetError("port must be between 1 and 65535")
+    model_root = Path(
+        str(
+            manifest.get(
+                "linked_model",
+                workspace.models / str(manifest.get("model_id", DEFAULT_MODEL_ID)),
+            )
+        )
+    )
     return [
         omlx_command(workspace),
         "serve",
         "--model-dir",
-        str(workspace.models),
+        str(model_root),
         "--host",
         host,
         "--port",
@@ -927,6 +935,7 @@ def claude_environment(
     model_id: str,
     api_key: str,
     config_dir: Path | None = None,
+    max_context_tokens: int | None = None,
 ) -> dict[str, str]:
     environment = {
         "ANTHROPIC_BASE_URL": base_url,
@@ -945,6 +954,8 @@ def claude_environment(
     }
     if config_dir is not None:
         environment["CLAUDE_CONFIG_DIR"] = str(config_dir)
+    if max_context_tokens is not None:
+        environment["CLAUDE_CODE_MAX_CONTEXT_TOKENS"] = str(max_context_tokens)
     return environment
 
 
@@ -982,12 +993,14 @@ def launch_claude(
     workspace.claude_config.chmod(0o700)
     ensure_user_skills_link(workspace)
     environment = os.environ.copy()
+    context_length = manifest.get("context_length")
     environment.update(
         claude_environment(
             base_url,
             model_alias(manifest),
             ensure_api_key(workspace),
             workspace.claude_config,
+            context_length if isinstance(context_length, int) else None,
         )
     )
     record_launcher_status(

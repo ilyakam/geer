@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 DEFAULT_MODEL_ID = "geer-local"
-DEFAULT_MODEL_ALIAS = "Geer Ornith 1.0 35B-A3B (MLX)"
+DEFAULT_MODEL_ALIAS = "Geer Ornith 1.5 35B-A3B (6-bit MLX)"
 DEFAULT_MODEL_SOURCE = Path("~/.geer/models/active").expanduser()
 BUILD_MANIFEST = "geer-build-manifest.json"
 REQUIRED_FILES = {
@@ -38,7 +38,7 @@ def model_alias(manifest: dict[str, Any]) -> str:
         return build["display_name"]
     quantization = manifest.get("quantization")
     if isinstance(quantization, dict) and isinstance(quantization.get("bits"), int):
-        return f"Geer Ornith 1.0 35B-A3B ({quantization['bits']}-bit MLX)"
+        return f"Geer Ornith 1.5 35B-A3B ({quantization['bits']}-bit MLX)"
     return DEFAULT_MODEL_ALIAS
 
 
