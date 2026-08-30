@@ -103,7 +103,7 @@ def test_fuse_ornith_experts_rejects_incomplete_expert():
 def test_recipe_summary_keeps_activation_manual():
     model_build = load_model_build()
     recipe = model_build.load_recipe(
-        Path(__file__).parents[1] / "model-recipes" / "ornith-1.0-35b-6bit.toml"
+        Path(__file__).parents[1] / "model-recipes" / "ornith-1.5-35b-6bit.toml"
     )
 
     summary = model_build.recipe_summary(
@@ -112,9 +112,39 @@ def test_recipe_summary_keeps_activation_manual():
         Path("/tmp/output"),
     )
 
-    assert summary["source_revision"] == ("5df2ed3f675c7beaa490328cc70bb573b65fb660")
+    assert summary["source_revision"] == (
+        "e4dfb35a93d4b6822a811a7676f3488514abe7e2"
+    )
     assert summary["quantization"]["bits"] == 6
     assert summary["activation"] == "manual"
+
+
+@pytest.mark.parametrize(
+    ("recipe_name", "bits", "strategy"),
+    (
+        ("ornith-1.5-35b-6bit.toml", 6, None),
+        (
+            "ornith-1.5-35b-4-8bit.toml",
+            4,
+            "routed_experts_4bit_protected_text_8bit",
+        ),
+    ),
+)
+def test_ornith_15_recipes_pin_the_same_source(
+    recipe_name: str,
+    bits: int,
+    strategy: str | None,
+):
+    model_build = load_model_build()
+    recipe = model_build.load_recipe(
+        Path(__file__).parents[1] / "model-recipes" / recipe_name
+    )
+
+    assert recipe.source["repo_id"] == "ornith-ai/Ornith-1.5-35B-A3B"
+    assert recipe.source["revision"] == "e4dfb35a93d4b6822a811a7676f3488514abe7e2"
+    assert recipe.source["expected_bytes"] == 71_928_654_040
+    assert recipe.quantization["bits"] == bits
+    assert recipe.quantization.get("strategy") == strategy
 
 
 def test_routed_expert_mixed_quantization_policy():
@@ -243,6 +273,53 @@ def test_verify_source_rehashes_the_pinned_snapshot(
     (snapshot / "weights.bin").write_bytes(b"changed")
     with pytest.raises(model_build.BuildError, match="source files"):
         model_build.verify_source(recipe, snapshot)
+
+
+def test_verify_safetensors_headers_rejects_malformed_json(tmp_path: Path):
+    model_build = load_model_build()
+    snapshot = tmp_path / "snapshot"
+    snapshot.mkdir()
+    valid_header = b'{"weight":{"dtype":"F32","shape":[],"data_offsets":[0,0]}}'
+    (snapshot / "valid.safetensors").write_bytes(
+        len(valid_header).to_bytes(8, "little") + valid_header
+    )
+    model_build.verify_safetensors_headers(snapshot)
+
+    invalid_header = b'{"weight\x00":{"dtype":"F32"}}'
+    (snapshot / "invalid.safetensors").write_bytes(
+        len(invalid_header).to_bytes(8, "little") + invalid_header
+    )
+    with pytest.raises(model_build.BuildError, match="safetensors header is invalid"):
+        model_build.verify_safetensors_headers(snapshot)
+
+
+def test_retire_ornith_1_0_removes_previous_candidate(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+):
+    model_build = load_model_build()
+    home = tmp_path / "home"
+    candidate = home / "models" / "candidates" / "ornith-1.0-35b-6bit"
+    candidate.mkdir(parents=True)
+    (candidate / model_build.BUILD_MANIFEST).write_text(
+        '{"recipe": "ornith-1.0-35b-6bit"}\n',
+        encoding="utf-8",
+    )
+    previous = home / "models" / "previous"
+    previous.parent.mkdir(parents=True, exist_ok=True)
+    previous.symlink_to(candidate)
+    monkeypatch.setattr(model_build, "geer_home", lambda: home)
+    monkeypatch.setattr(model_build, "default_cache_dir", lambda: home / "cache")
+
+    result = model_build.retire_ornith_1_0(str(candidate))
+
+    assert result == {
+        "retired": True,
+        "recipe": "ornith-1.0-35b-6bit",
+        "removed_path": str(candidate),
+    }
+    assert not candidate.exists()
+    assert not previous.exists()
 
 
 def test_prepare_publication_copies_metadata_and_refreshes_hashes(

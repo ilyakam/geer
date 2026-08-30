@@ -24,7 +24,15 @@ T3_CLAUDE_BUILT_IN_MODELS = (
     "claude-haiku-4-5",
 )
 RETIRED_GEER_MODELS = (
+    "Geer Ornith 1.0 35B-A3B (6-bit MLX)",
     "Geer Ornith 1.0 35B-A3B (4-bit MLX)",
+    "Geer Ornith 1.0 35B-A3B (4/8-bit MLX)",
+    "Geer Qwen 3.8 27B (Low Reasoning)",
+    "Geer Qwen 3.8 27B (Medium Reasoning)",
+    "Geer Qwen 3.8 27B (Extra High Reasoning)",
+    "Geer Qwen 3.8 27B (No Thinking)",
+    "Geer Qwen 3.8 27B (6-bit MLX)",
+    "geer-qwen3-8-27b",
     "geer-local",
 )
 
@@ -53,6 +61,37 @@ def _client_settings_path(settings_path: Path) -> Path:
 
 def _provider_cache_path(settings_path: Path) -> Path:
     return settings_path.parent.parent / "caches" / f"{PROVIDER_ID}.json"
+
+
+def _migrate_favorites(client_settings: dict[str, Any], alias: str) -> int:
+    favorites = client_settings.get("favorites")
+    if favorites is None:
+        return 0
+    if not isinstance(favorites, list):
+        raise AssetError("T3 favorites must contain a JSON array")
+
+    migrated = 0
+    alias_present = any(
+        isinstance(favorite, dict)
+        and favorite.get("provider") == PROVIDER_ID
+        and favorite.get("model") == alias
+        for favorite in favorites
+    )
+    updated: list[Any] = []
+    for favorite in favorites:
+        if (
+            isinstance(favorite, dict)
+            and favorite.get("provider") == PROVIDER_ID
+            and favorite.get("model") in RETIRED_GEER_MODELS
+        ):
+            migrated += 1
+            if not alias_present:
+                updated.append({**favorite, "model": alias})
+                alias_present = True
+            continue
+        updated.append(favorite)
+    client_settings["favorites"] = updated
+    return migrated
 
 
 def _backup_and_write(
@@ -150,6 +189,7 @@ def planned_t3_settings(
         "hiddenModels": [*T3_CLAUDE_BUILT_IN_MODELS, *RETIRED_GEER_MODELS],
         "modelOrder": [alias],
     }
+    favorites_migrated = _migrate_favorites(client_settings, alias)
     result = {
         "provider": PROVIDER_ID,
         "driver": "claudeAgent",
@@ -161,6 +201,7 @@ def planned_t3_settings(
         "t3_compatibility_version": f">={T3_MINIMUM_VERSION}",
         "t3_tested_version": T3_TESTED_VERSION,
         "hidden_models": len(T3_CLAUDE_BUILT_IN_MODELS) + len(RETIRED_GEER_MODELS),
+        "favorites_migrated": favorites_migrated,
     }
     return {settings_path: settings, client_path: client_settings}, result
 

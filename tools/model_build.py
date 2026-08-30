@@ -27,8 +27,9 @@ from pathlib import Path
 from typing import Any
 
 BUILD_MANIFEST = "geer-build-manifest.json"
-DEFAULT_RECIPE = Path(__file__).resolve().parents[1] / "model-recipes" / "ornith-1.0-35b-6bit.toml"
+DEFAULT_RECIPE = Path(__file__).resolve().parents[1] / "model-recipes" / "ornith-1.5-35b-6bit.toml"
 SAFETY_MARGIN_BYTES = 10 * 1024**3
+MAX_SAFETENSORS_HEADER_BYTES = 100 * 1024**2
 ROUTED_EXPERTS_4BIT_PROTECTED_TEXT_8BIT = "routed_experts_4bit_protected_text_8bit"
 
 
@@ -179,6 +180,30 @@ def hash_files(root: Path, *, excluded: set[str] | None = None) -> list[dict[str
     return records
 
 
+def verify_safetensors_headers(root: Path) -> None:
+    """Reject truncated or malformed safetensors before model conversion."""
+
+    for path in sorted(root.rglob("*.safetensors")):
+        try:
+            with path.open("rb") as stream:
+                raw_length = stream.read(8)
+                if len(raw_length) != 8:
+                    raise BuildError(f"safetensors header length is truncated: {path}")
+                header_length = int.from_bytes(raw_length, "little")
+                if header_length > MAX_SAFETENSORS_HEADER_BYTES:
+                    raise BuildError(
+                        f"safetensors header is unreasonably large ({header_length} bytes): {path}"
+                    )
+                header = stream.read(header_length)
+                if len(header) != header_length:
+                    raise BuildError(f"safetensors header is truncated: {path}")
+                json.loads(header)
+        except BuildError:
+            raise
+        except (OSError, ValueError, json.JSONDecodeError) as error:
+            raise BuildError(f"safetensors header is invalid: {path}") from error
+
+
 def state_path(recipe: Recipe) -> Path:
     return geer_home() / "state" / "model-builds" / f"{recipe.identifier}.json"
 
@@ -268,6 +293,7 @@ def download_source(recipe: Recipe, cache_dir: Path) -> Path:
         )
 
     files = hash_files(snapshot)
+    verify_safetensors_headers(snapshot)
     actual_bytes = sum(record["bytes"] for record in files)
     expected_bytes = int(recipe.source["expected_bytes"])
     if actual_bytes != expected_bytes:
@@ -343,6 +369,7 @@ def verify_source(recipe: Recipe, snapshot: Path) -> dict[str, Any]:
         if manifest.get(key) != expected:
             raise BuildError(f"source manifest {key} does not match the recipe")
 
+    verify_safetensors_headers(snapshot)
     actual_files = hash_files(snapshot)
     if manifest.get("files") != actual_files:
         raise BuildError("source files do not match the downloaded source manifest")
@@ -855,7 +882,7 @@ def published_install_plan(recipe: Recipe, cache_dir: Path) -> dict[str, Any]:
     }
 
 
-def activate_snapshot(snapshot: Path) -> dict[str, str | None]:
+def activate_snapshot(snapshot: Path) -> dict[str, Any]:
     models = geer_home() / "models"
     ensure_private_dir(models)
     active = models / "active"
@@ -885,6 +912,43 @@ def activate_snapshot(snapshot: Path) -> dict[str, str | None]:
         "target": str(snapshot),
         "previous": old_target,
     }
+
+
+def retire_ornith_1_0(previous: str | None) -> dict[str, Any]:
+    """Remove the retired Ornith 1.0 activation after a verified upgrade."""
+
+    if previous is None:
+        return {"retired": False}
+
+    target = Path(previous).resolve(strict=False)
+    manifest_path = target / BUILD_MANIFEST
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {"retired": False, "reason": "previous manifest unavailable"}
+    recipe = manifest.get("recipe")
+    if not isinstance(recipe, str) or not recipe.startswith("ornith-1.0-"):
+        return {"retired": False, "recipe": recipe}
+
+    models = geer_home() / "models"
+    previous_link = models / "previous"
+    if previous_link.is_symlink() and previous_link.resolve(strict=False) == target:
+        previous_link.unlink()
+
+    removed_path: str | None = None
+    if target.is_relative_to(models):
+        shutil.rmtree(target)
+        removed_path = str(target)
+    else:
+        cache = default_cache_dir().resolve(strict=False)
+        repository = target.parent.parent
+        if repository.parent == cache and repository.name.startswith(
+            "models--ilyakam--Geer-Ornith-1.0-"
+        ):
+            shutil.rmtree(repository)
+            removed_path = str(repository)
+
+    return {"retired": True, "recipe": recipe, "removed_path": removed_path}
 
 
 def install_published(recipe: Recipe, cache_dir: Path) -> dict[str, Any]:
@@ -927,6 +991,7 @@ def install_published(recipe: Recipe, cache_dir: Path) -> dict[str, Any]:
         raise BuildError(f"published model download failed: {error}") from error
     verified = verify_output(recipe, snapshot)
     activation = activate_snapshot(snapshot)
+    activation["retired_previous"] = retire_ornith_1_0(activation["previous"])
     return {
         **verified,
         "repo_id": plan["repo_id"],

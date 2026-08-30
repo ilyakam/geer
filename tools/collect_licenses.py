@@ -13,7 +13,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 LICENSE_NAMES = re.compile(r"(?:license|licence|copying|notice|authors)", re.IGNORECASE)
-TOKENIZERS_LICENSE = ROOT / "model-cards/ornith-1.0-35b-6bit/LICENSE-QWEN"
+TOKENIZERS_LICENSE = ROOT / "model-cards/ornith-1.5-35b-6bit/LICENSE-QWEN"
 
 
 def production_packages() -> list[str]:

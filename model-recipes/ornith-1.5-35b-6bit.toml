@@ -1,13 +1,13 @@
 schema_version = 1
-id = "ornith-1.0-35b-6bit"
-display_name = "Geer Ornith 1.0 35B-A3B (6-bit MLX)"
+id = "ornith-1.5-35b-6bit"
+display_name = "Geer Ornith 1.5 35B-A3B (6-bit MLX)"
 
 [source]
-repo_id = "deepreinforce-ai/Ornith-1.0-35B"
-revision = "5df2ed3f675c7beaa490328cc70bb573b65fb660"
-expected_bytes = 70250400102
+repo_id = "ornith-ai/Ornith-1.5-35B-A3B"
+revision = "e4dfb35a93d4b6822a811a7676f3488514abe7e2"
+expected_bytes = 71928654040
 license = "MIT"
-license_evidence_url = "https://huggingface.co/deepreinforce-ai/Ornith-1.0-35B/blob/5df2ed3f675c7beaa490328cc70bb573b65fb660/README.md"
+license_evidence_url = "https://huggingface.co/ornith-ai/Ornith-1.5-35B-A3B/blob/e4dfb35a93d4b6822a811a7676f3488514abe7e2/README.md"
 
 [conversion]
 transform = "qwen3_5_moe_unfused_experts"

@@ -1,0 +1,7 @@
+schema_version = 1
+recipe = "ornith-1.5-35b-6bit"
+repo_id = "ilyakam/Geer-Ornith-1.5-35B-A3B-6bit-MLX"
+revision = "c3d5e9008c891ef96da42630ef8b484aef696669"
+tag = "2026-08-20"
+expected_bytes = 29090460346
+model_card_dir = "../model-cards/ornith-1.5-35b-6bit"

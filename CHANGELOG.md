@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Upgrade from Ornith 1.0 to 1.5
+- T3 Code model selector and set favorite to Ornith 1.5
+
 ## [0.1.0] - 2026-08-02
 
 ### Added

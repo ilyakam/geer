@@ -92,6 +92,7 @@ def test_claude_environment_routes_every_model_tier_locally() -> None:
         "geer-local",
         "local-secret",
         Path("/tmp/geer-claude"),
+        262_144,
     )
 
     assert environment["ANTHROPIC_BASE_URL"] == "http://127.0.0.1:8765"
@@ -104,6 +105,7 @@ def test_claude_environment_routes_every_model_tier_locally() -> None:
         environment["ANTHROPIC_DEFAULT_HAIKU_MODEL"],
     } == {"geer-local"}
     assert environment["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] == "1"
+    assert environment["CLAUDE_CODE_MAX_CONTEXT_TOKENS"] == "262144"
     assert environment["ENABLE_TOOL_SEARCH"] == "false"
     assert environment["CLAUDE_CONFIG_DIR"] == "/tmp/geer-claude"
     assert len(OMLX_REVISION) == 40
@@ -206,6 +208,10 @@ def test_serve_command_isolates_state_and_disables_external_discovery(
 
     assert command[0:2] == ["/usr/local/bin/omlx", "serve"]
     assert command[command.index("--host") + 1] == "127.0.0.1"
+    assert (
+        command[command.index("--model-dir") + 1]
+        == "/tmp/geer-test/.geer/models/geer-local"
+    )
     assert command[command.index("--base-path") + 1] == "/tmp/geer-test/.geer/omlx-state"
     cache = command[command.index("--paged-ssd-cache-dir") + 1]
     assert cache.startswith("/tmp/geer-test/.geer/caches/")
@@ -421,6 +427,7 @@ def test_launch_claude_records_selected_endpoint_before_exec(
     workspace = Workspace(tmp_path)
     manifest = {
         "model_id": "geer-local",
+        "context_length": 262_144,
         "build": {"display_name": "Geer Test Model"},
     }
     monkeypatch.setattr("geer.runtime.verify_assets", lambda value: manifest)
@@ -437,7 +444,8 @@ def test_launch_claude_records_selected_endpoint_before_exec(
         lambda workspace, arguments, **kwargs: arguments,
     )
 
-    def stop_before_exec(*args, **kwargs):
+    def stop_before_exec(command, arguments, environment):
+        assert environment["CLAUDE_CODE_MAX_CONTEXT_TOKENS"] == "262144"
         raise RuntimeError("exec reached")
 
     monkeypatch.setattr("geer.runtime.os.execvpe", stop_before_exec)
