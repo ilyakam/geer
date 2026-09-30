@@ -1,0 +1,35 @@
+{
+  "archive": {
+    "bytes": 31069587,
+    "sha256": "4692aba1dcd48219b61edb4ecebc3c33f6199ebe65299228fce5ba69c31a23a6",
+    "url": "https://github.com/earendil-works/pi/releases/download/v0.99.1/pi-darwin-arm64.tar.gz"
+  },
+  "embedded_runtime": {
+    "license_url": "https://github.com/oven-sh/bun/blob/bun-v1.3.14/LICENSE.md",
+    "name": "Bun",
+    "version": "1.3.14"
+  },
+  "extracted_bytes": 84421159,
+  "files_sha256": {
+    "assets/clankolas.png": "169acd0dfe6fbb8d8742ed24a3fc654fd0b2e2d4223c733249c5493723f1b72d",
+    "export-html/template.css": "8ee19851f8e583277ed396cbb76496687aa556707fdfc1f78d1118bff87c740a",
+    "export-html/template.html": "916782b1184a9597527605ad751e2b3af30fcea23ba2194002969cd217a06881",
+    "export-html/template.js": "b5bbffdf5d9ec8bb519df45c7ff953ac1969af80e8aba33331b9f87983f91fa5",
+    "export-html/vendor/highlight.min.js": "837a6fa5b0c736b52bbde2b2b6190f305da3fc9ed41681db5321507057b5c846",
+    "export-html/vendor/marked.min.js": "d5487edc7258b404bfa74c393d74a6393155f02517bd5e7e77cd64f8187f39a0",
+    "native/darwin/prebuilds/darwin-arm64/darwin-platform.node": "36e909adf35c2734a2a52b3d65b7dbfb83f2278f306d51b7e32c5045516dfb7f",
+    "package.json": "c701ddbf28b5170deb478b8586ee713f9372027c04736946a4ffe82168ece5ba",
+    "photon_rs_bg.wasm": "10468181565c56004c867f3a4af96f89a0ef5a63a72f2b5fb12c1f1992a3615c",
+    "pi": "aceda3ee52b624a3c695de494b2bd7a24bf59b5a2e0ac5839e7eb80344636a23",
+    "theme/dark.json": "c11a588b714d35300293079b425fb09a3693d4b2d453585d211b08163c648b75",
+    "theme/light.json": "f590c51c2bc8b238891efd0e983473ed2e2a6487b6692cc1d4b2845165e703f7",
+    "theme/theme-schema.json": "8787918132dbf7aaee1be2ab30ee6306c715dad609cd85e448df595bb02e2a56"
+  },
+  "license_url": "https://github.com/earendil-works/pi/blob/d86654abb8862e201933517d6f1fce9f88dd117f/LICENSE",
+  "name": "Pi",
+  "platform": "darwin-arm64",
+  "revision": "d86654abb8862e201933517d6f1fce9f88dd117f",
+  "schema_version": 1,
+  "source_url": "https://github.com/earendil-works/pi/releases/download/v0.99.1/pi-0.99.1-source.tar.gz",
+  "version": "0.99.1"
+}

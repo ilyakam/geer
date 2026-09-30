@@ -10,11 +10,13 @@ from typing import Any
 
 from .assets import DEFAULT_MODEL_ID, AssetError, Workspace, initialize_assets
 from .hardware import HardwareProfile, select_hardware_profile
+from .pi_distribution import PI_ARCHIVE_BYTES, PI_EXTRACTED_BYTES
 from .runtime import (
     RUNTIME_ARCHIVE_BYTES,
     RUNTIME_INSTALLED_BYTES,
     ensure_model_settings,
 )
+from .t3_distribution import T3_ARCHIVE_BYTES, T3_INSTALLED_BYTES
 
 MODEL_PROFILE = "ornith"
 MODEL_RECIPES = {
@@ -94,18 +96,34 @@ def model_plan(
         "runtime_download_human": installer.human_bytes(RUNTIME_ARCHIVE_BYTES),
         "runtime_installed_bytes": RUNTIME_INSTALLED_BYTES,
         "runtime_installed_human": installer.human_bytes(RUNTIME_INSTALLED_BYTES),
+        "pi_download_bytes": PI_ARCHIVE_BYTES,
+        "pi_download_human": installer.human_bytes(PI_ARCHIVE_BYTES),
+        "pi_installed_bytes": PI_EXTRACTED_BYTES,
+        "pi_installed_human": installer.human_bytes(PI_EXTRACTED_BYTES),
+        "t3_download_bytes": T3_ARCHIVE_BYTES,
+        "t3_download_human": installer.human_bytes(T3_ARCHIVE_BYTES),
+        "t3_installed_bytes": T3_INSTALLED_BYTES,
+        "t3_installed_human": installer.human_bytes(T3_INSTALLED_BYTES),
         "temporary_bytes": TEMPORARY_SPACE_BYTES,
         "temporary_human": installer.human_bytes(TEMPORARY_SPACE_BYTES),
         "required_free_bytes": (
             installed_bytes
             + RUNTIME_ARCHIVE_BYTES
             + RUNTIME_INSTALLED_BYTES
+            + PI_ARCHIVE_BYTES
+            + PI_EXTRACTED_BYTES
+            + T3_ARCHIVE_BYTES
+            + T3_INSTALLED_BYTES
             + TEMPORARY_SPACE_BYTES
         ),
         "required_free_human": installer.human_bytes(
             installed_bytes
             + RUNTIME_ARCHIVE_BYTES
             + RUNTIME_INSTALLED_BYTES
+            + PI_ARCHIVE_BYTES
+            + PI_EXTRACTED_BYTES
+            + T3_ARCHIVE_BYTES
+            + T3_INSTALLED_BYTES
             + TEMPORARY_SPACE_BYTES
         ),
         "context_window": hardware_profile.max_context_window,

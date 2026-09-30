@@ -36,6 +36,28 @@ uv run ruff check .
 uv run pytest
 ```
 
+For live harness checks, stage Geer's pinned upstream Pi runtime with:
+
+```sh
+uv run python tools/install_pi.py --plan
+uv run python tools/install_pi.py
+```
+
+The development runtime stays under ignored `build/pi-runtime`. Installed
+setup installs the same verified release under `~/.geer/pi-runtime`, so users
+need no separate Node or Pi installation. See
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for the source and license links.
+Geer's package carries the adapter and release manifest; the upstream
+standalone binary is downloaded during setup.
+
+T3 Code is required. Setup reuses a compatible app, including Nightly, or verifies
+the pinned stable arm64 release and installs it into `~/Applications/T3 Code.app`.
+Older apps require an update in place; setup does not install a second copy.
+It creates fresh settings directly, with Geer selected for chat and title
+generation; existing profiles retain their other preferences. Test both
+missing-app installation and first-launch onboarding in an isolated account
+or home, without closing another user's active T3 session.
+
 ### macOS Installer
 
 Build an unsigned, self-contained Apple Silicon development installer with:
@@ -45,8 +67,8 @@ uv run python tools/build_release.py
 ```
 
 The package is written to `dist/Geer-<version>-macOS-arm64.pkg`. It contains the
-frozen Geer CLI, Semble, the native Geer Setup application, and the retained
-terminal fallback. It exercises the same installation and guided onboarding
+frozen Geer CLI and Pi adapter, Semble, the native Geer Setup application, and
+the retained terminal fallback. It exercises the same installation and guided onboarding
 path as a release package. An unsigned local build does not require
 an Apple Developer certificate, Keychain profile, or access to maintainer
 infrastructure.
@@ -72,7 +94,7 @@ geer doctor
 ```
 
 For an upgrade/reinstall test, quit T3 Code first. `geer uninstall` removes the
-machine-wide package and T3 provider but deliberately retains `~/.geer` so the
+machine-wide package and T3 provider but retains T3 Code and `~/.geer` so the
 next setup can verify and reuse downloaded model state. Do not run the optional
 `rm -rf ~/.geer` cleanup command when testing retained-state behavior.
 
@@ -98,6 +120,11 @@ uv run geer retrieval-canary
 uv run geer doctor
 uv run geer stats
 ```
+
+T3 integration requires version 0.0.43 or newer. It uses T3's existing ACP
+transport, and interactive Geer chats require Full access. Verify the actual
+Pi process, model label, repository tool use, cancellation, and resumed history
+in T3; a direct API canary alone does not prove the integration works.
 
 Some commands start a large local model and may require substantial memory.
 State the exact checks you could run and do not present an unrun hardware test
@@ -240,7 +267,7 @@ Never commit, upload, or include in an issue or pull request:
 
 - prompts, completions, or private repository contents;
 - credentials, tokens, OAuth files, or license data;
-- raw Claude Code or other harness request dumps;
+- raw harness request dumps;
 - private prompt, KV, retrieval, or conversation caches;
 - files from `.geer/` or `ai-refs/`;
 - local model caches, candidates, or weights outside the reviewed publication

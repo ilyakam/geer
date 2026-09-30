@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- ACP adapter for T3 Code.
+- Pi harness with automatic installation.
+- Automatic discovery of existing skills across harnesses.
+
+### Changed
+
+- Require and automatically install T3 Code.
+
+### Removed
+
+- Claude Code harness.
+
 ## [0.2.0] - 2026-08-30
 
 ### Changed

@@ -30,7 +30,7 @@ from .runtime import (
     bootstrap_runtime,
     canary,
     doctor,
-    launch_claude,
+    launch_pi,
     record_launcher_status,
     run_server,
     runtime_status,
@@ -40,7 +40,7 @@ from .runtime import (
     stop_server,
 )
 from .setup_protocol import ProtocolError, run_json_setup
-from .t3 import remove_t3
+from .t3 import remove_t3, t3_settings_path, t3_status
 from .uninstall import uninstall
 
 ROOT_ALIASES = {
@@ -92,7 +92,6 @@ def parser() -> argparse.ArgumentParser:
     setup_command = commands.add_parser("setup", help="set up Geer on this Mac")
     setup_command.add_argument("--plan", action="store_true")
     setup_command.add_argument("--yes", action="store_true")
-    setup_command.add_argument("--skip-t3", action="store_true")
     setup_command.add_argument("--high-performance-download", action="store_true")
     setup_command.add_argument(
         "--frontend",
@@ -162,8 +161,8 @@ def parser() -> argparse.ArgumentParser:
     probe.add_argument("--max-tokens", type=int, default=32)
     probe.add_argument("--timeout", type=float, default=600)
     commands.add_parser("retrieval-canary", help=argparse.SUPPRESS)
-    claude = commands.add_parser("claude", help=argparse.SUPPRESS)
-    _add_endpoint_arguments(claude)
+    pi = commands.add_parser("pi", help=argparse.SUPPRESS)
+    _add_endpoint_arguments(pi)
     launch = commands.add_parser("launch", help=argparse.SUPPRESS)
     _add_endpoint_arguments(launch)
     public = {
@@ -231,13 +230,27 @@ def _confirm_t3_remove(*, assume_yes: bool, plan_only: bool) -> bool:
 
 def _print_status(result: dict[str, Any]) -> None:
     online = result.get("server") == "online"
-    print("Geer is ready\n")
+    pi = result.get("pi", {})
+    pi_ready = pi.get("status") == "ready"
+    t3 = result.get("t3", {})
+    t3_ready = t3.get("ready") is True
+    print("Geer is ready\n" if pi_ready and t3_ready else "Geer needs setup\n")
     models = result.get("models", {}).get("data", [])
     model = models[0].get("id") if models else result.get("model_id", "unknown")
     print(f"Model      {model}")
+    print(f"Harness    Pi {pi.get('version')}" if pi_ready else "Harness    Pi unavailable")
+    print(
+        f"Desktop    T3 Code {t3.get('version')}" if t3_ready else "Desktop    T3 Code needs setup"
+    )
     print(f"Server     {'Running' if online else 'Stopped — starts on demand'}")
     retrieval = result.get("retrieval", {})
     print(f"Retrieval  {'Ready' if retrieval.get('provider') == 'semble' else 'Unavailable'}")
+    if not pi_ready or not t3_ready:
+        if pi.get("error"):
+            print(f"\n{pi['error']}")
+        if t3.get("error"):
+            print(f"\n{t3['error']}")
+        print("\nRun `geer setup` to install or repair Geer, Pi, and T3 Code.")
 
 
 def _print_models(result: dict[str, Any]) -> None:
@@ -261,7 +274,7 @@ def main(arguments: list[str] | None = None) -> int:
     root = parser()
     options, remaining = root.parse_known_args(normalized)
     workspace = None
-    if remaining and options.command not in {"claude", "launch"}:
+    if remaining and options.command not in {"pi", "launch"}:
         root.error(f"unrecognized arguments: {' '.join(remaining)}")
     try:
         workspace = find_workspace()
@@ -275,7 +288,6 @@ def main(arguments: list[str] | None = None) -> int:
         if options.command == "setup":
             arguments = {
                 "assume_yes": options.yes,
-                "skip_t3": options.skip_t3,
                 "high_performance": options.high_performance_download,
                 "plan_only": options.plan,
             }
@@ -352,12 +364,14 @@ def main(arguments: list[str] | None = None) -> int:
                         {
                             "id": "t3",
                             "name": "T3 Code",
-                            "configured": _t3_configured(),
+                            "configured": t3_status(workspace).get("ready") is True,
                         }
                     ]
                 }
                 if not json_output:
-                    state = "configured" if result["integrations"][0]["configured"] else "available"
+                    state = (
+                        "configured" if result["integrations"][0]["configured"] else "needs setup"
+                    )
                     print(f"T3 Code  {state}")
                     return 0
             elif options.integration_command == "add":
@@ -367,7 +381,7 @@ def main(arguments: list[str] | None = None) -> int:
                     plan_only=options.plan,
                 )
             elif options.integration_command == "remove":
-                settings = Path("~/.t3/userdata/settings.json").expanduser()
+                settings = t3_settings_path()
                 if not _confirm_t3_remove(
                     assume_yes=options.yes,
                     plan_only=options.plan,
@@ -397,15 +411,17 @@ def main(arguments: list[str] | None = None) -> int:
             )
         elif options.command == "retrieval-canary":
             result = retrieval_canary(workspace)
-        elif options.command == "claude":
-            launch_claude(workspace, remaining, port=options.port)
-        elif options.command == "launch":
-            launch_claude(
+        elif options.command == "pi":
+            launch_pi(
                 workspace,
                 remaining,
-                ensure_server=True,
+                ensure_server=remaining != ["--version"],
                 port=options.port,
             )
+        elif options.command == "launch":
+            from .pi_acp import run_acp
+
+            return run_acp(workspace, remaining)
         else:
             raise AssertionError(f"unhandled command: {options.command}")
     except (AssetError, ProtocolError, SetupError, UnsupportedHardwareError) as error:
@@ -425,16 +441,9 @@ def main(arguments: list[str] | None = None) -> int:
         print(f"error: {error}", file=sys.stderr)
         return 1
     print(json.dumps(result, indent=2, sort_keys=True))
+    if options.command == "doctor":
+        return 0 if result.get("ready") is True else 1
     return 0
-
-
-def _t3_configured() -> bool:
-    settings = Path("~/.t3/userdata/settings.json").expanduser()
-    try:
-        value = json.loads(settings.read_text())
-    except (OSError, json.JSONDecodeError):
-        return False
-    return "claudeGeer" in value.get("providerInstances", {})
 
 
 if __name__ == "__main__":

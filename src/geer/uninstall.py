@@ -10,10 +10,11 @@ from typing import Any
 from .assets import Workspace
 from .onboarding import SetupError, confirm
 from .runtime import stop_server
-from .t3 import remove_t3
+from .t3 import remove_t3, t3_settings_path
 
 INSTALL_PATHS = (
     Path("/usr/local/bin/geer"),
+    Path("/usr/local/bin/geer-pi"),
     Path("/usr/local/bin/geer-claude"),
     Path("/Library/Application Support/Geer"),
 )
@@ -125,7 +126,7 @@ def uninstall(
     else:
         print("  ✓ Geer server was already stopped")
 
-    settings = Path("~/.t3/userdata/settings.json").expanduser()
+    settings = t3_settings_path()
     integration = remove_t3(settings)
     if integration["removed"]:
         print("  ✓ Removed Geer from T3 Code")

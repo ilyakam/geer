@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 import os
 import platform
 import plistlib
@@ -15,6 +16,9 @@ import tomllib
 import urllib.request
 import xml.etree.ElementTree as ET
 from pathlib import Path
+
+from geer.pi_distribution import pi_distribution_manifest
+from geer.t3_distribution import T3_BUNDLE_NAME, T3_VERSION, t3_distribution_manifest
 
 ROOT = Path(__file__).resolve().parents[1]
 BUILD = ROOT / "build" / "release"
@@ -92,6 +96,8 @@ def copy_resources(payload: Path) -> None:
         "uv.lock",
     ):
         shutil.copy(ROOT / name, destination / name)
+    for name in ("pi-runtime.json", "t3-desktop.json"):
+        shutil.copy(ROOT / "packaging" / name, destination / name)
     for name in (
         "model-cards",
         "model-distributions",
@@ -259,7 +265,7 @@ def build_payload(payload: Path, version: str, identity: str | None) -> None:
     build_runtime(payload, identity)
     cli_root = payload / "usr/local/bin"
     cli_root.mkdir(parents=True)
-    for name in ("geer", "geer-claude"):
+    for name in ("geer", "geer-pi"):
         cli = cli_root / name
         shutil.copy(ROOT / "packaging" / name, cli)
         cli.chmod(0o755)
@@ -274,7 +280,7 @@ def build_scripts(scripts: Path) -> None:
 
 def verify_payload(payload: Path) -> None:
     cli = payload / "usr/local/bin/geer"
-    launcher = payload / "usr/local/bin/geer-claude"
+    launcher = payload / "usr/local/bin/geer-pi"
     runtime = payload / RUNTIME_ROOT / "geer"
     semble = payload / RUNTIME_ROOT / "semble"
     setup_command = payload / APP_ROOT / "geer-setup.command"
@@ -287,6 +293,26 @@ def verify_payload(payload: Path) -> None:
             raise BuildError(f"release payload is missing an executable: {path}")
     if not license_inventory.is_file() or "Python " not in license_inventory.read_text():
         raise BuildError("release payload is missing third-party license evidence")
+    for name, expected, label in (
+        ("pi-runtime.json", pi_distribution_manifest(), "Pi"),
+        ("t3-desktop.json", t3_distribution_manifest(), "T3 Code"),
+    ):
+        try:
+            manifest = json.loads((payload / APP_ROOT / name).read_text())
+        except (OSError, ValueError) as error:
+            raise BuildError(
+                f"release payload is missing its pinned upstream {label} manifest"
+            ) from error
+        if manifest != expected:
+            raise BuildError(f"release payload has an unexpected pinned upstream {label} manifest")
+    if (payload / APP_ROOT / "runtime/pi").exists():
+        raise BuildError("Pi must be downloaded from upstream during setup, not bundled")
+    if any(path.name in ("T3 Code.app", T3_BUNDLE_NAME) for path in payload.rglob("*.app")) or any(
+        payload.rglob(f"T3-Code-{T3_VERSION}-arm64.zip")
+    ):
+        raise BuildError("T3 Code must be downloaded from upstream during setup, not bundled")
+    if (payload / "usr/local/bin/geer-claude").exists():
+        raise BuildError("release payload contains the retired Claude launcher")
     forbidden = {
         str(ROOT).encode(): "checkout path",
         str(Path.home()).encode(): "builder home",
@@ -340,6 +366,21 @@ def verify_payload(payload: Path) -> None:
     )
     if result.stdout != source_help.stdout:
         raise BuildError("packaged CLI does not match the current worktree")
+    launch_version = subprocess.run(
+        [str(runtime), "launch", "--version"],
+        check=True,
+        capture_output=True,
+        text=True,
+        env={
+            **os.environ,
+            "GEER_WORKSPACE": str(payload / APP_ROOT),
+            "GEER_HOME": str(BUILD / "smoke-home"),
+            "GEER_CLI": str(cli),
+        },
+    )
+    expected_pi_version = pi_distribution_manifest()["version"]
+    if launch_version.stdout.strip() != f"Geer Pi {expected_pi_version}":
+        raise BuildError("packaged Pi ACP launcher has an unexpected version")
     result = subprocess.run(
         [str(semble), "--help"],
         check=True,
@@ -462,7 +503,7 @@ def main(argv: list[str] | None = None) -> int:
         run(["spctl", "--assess", "--type", "install", "--verbose=2", str(output)])
     print(f"\nBuilt {output}")
     if options.installer_sign is None:
-        print("The package is unsigned. Sign and notarize it before publishing.")
+        print("The package is unsigned.")
     return 0
 
 

@@ -1,0 +1,24 @@
+{
+  "archive": {
+    "bytes": 137613348,
+    "sha256": "480b5cd8ebcee4f4f43e108d309d91fe7c879931d8aae8a67b71cfd8a07ce0df",
+    "url": "https://github.com/pingdotgg/t3code/releases/download/v0.0.44/T3-Code-0.0.44-arm64.zip"
+  },
+  "bundle_id": "com.t3tools.t3code",
+  "bundle_name": "T3 Code (Alpha).app",
+  "copyright": "Copyright (c) 2026 T3 Tools Inc.",
+  "executable": "T3 Code (Alpha)",
+  "installed_bytes": 334315639,
+  "license": "MIT",
+  "license_url": "https://github.com/pingdotgg/t3code/blob/451afcb22d93f06cb24f9bc16703404564952553/LICENSE",
+  "name": "T3 Code",
+  "platform": "darwin-arm64",
+  "revision": "451afcb22d93f06cb24f9bc16703404564952553",
+  "schema_version": 1,
+  "signature": {
+    "requirement": "identifier \"com.t3tools.t3code\" and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] exists and certificate leaf[field.1.2.840.113635.100.6.1.13] exists and certificate leaf[subject.OU] = \"ARK85ZXQ4Z\"",
+    "team_id": "ARK85ZXQ4Z"
+  },
+  "source_url": "https://github.com/pingdotgg/t3code/tree/451afcb22d93f06cb24f9bc16703404564952553",
+  "version": "0.0.44"
+}
