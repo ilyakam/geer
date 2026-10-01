@@ -11,6 +11,7 @@ import signal
 import socket
 import subprocess
 import tarfile
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -20,9 +21,15 @@ from typing import Any, NoReturn
 
 from .assets import DEFAULT_MODEL_ID, AssetError, Workspace, model_alias, verify_assets
 from .hardware import select_hardware_profile
+from .pi_distribution import PI_REVISION, PI_VERSION, PiDistributionError, install_pi
 from .prompt import geer_system_prompt
-from .retrieval import retrieval_arguments, retrieval_status
-from .skills import ensure_user_skills_link
+from .retrieval import (
+    RETRIEVAL_SYSTEM_PROMPT,
+    retrieval_mcp_config,
+    retrieval_status,
+)
+from .skills import ensure_skills_directory, skill_paths
+from .t3 import t3_status
 
 DEFAULT_HOST = "127.0.0.1"
 
@@ -64,10 +71,6 @@ OMLX_OVERRIDES = (
 )
 RUNTIME_COMPONENTS = ("omlx", "python", "runtime.json")
 RUNTIME_PYTHON_PREFIX = "__GEER_RUNTIME_PYTHON_PREFIX__"
-MIN_CLAUDE_VERSION = (2, 1, 0)
-CLAUDE_INSTALL_URL = (
-    "https://code.claude.com/docs/en/quickstart#step-1-install-claude-code"
-)
 
 
 def endpoint(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT) -> str:
@@ -785,7 +788,6 @@ def post_json(
         headers={
             "Accept": "application/json",
             "Content-Type": "application/json",
-            "anthropic-version": "2023-06-01",
             **(
                 {"Authorization": f"Bearer {api_key}"}
                 if api_key is not None
@@ -824,12 +826,21 @@ def runtime_status(
             "ssd_max_size": CACHE_MAX_SIZE,
             "hot_max_size": HOT_CACHE_MAX_SIZE,
         },
-        "claude": {
-            "config_directory": str(workspace.claude_config),
-            "mode": "bare",
+        "pi": {
+            "config_directory": str(workspace.pi_config),
+            "required_version": PI_VERSION,
+            "required_revision": PI_REVISION,
         },
         "retrieval": retrieval_status(workspace),
+        "t3": t3_status(workspace),
     }
+    try:
+        status["pi"]["executable"] = compatible_pi(workspace)
+    except AssetError as error:
+        status["pi"].update({"status": "unavailable", "error": str(error)})
+    else:
+        status["pi"].update({"status": "ready", "version": PI_VERSION})
+    status["ready"] = status["pi"]["status"] == "ready" and status["t3"]["ready"] is True
     launcher = launcher_status(workspace)
     if launcher is not None:
         status["launcher"] = launcher
@@ -879,6 +890,33 @@ def snapshot_runtime(workspace: Workspace, base_url: str) -> dict[str, Any]:
     return record
 
 
+def _completion_usage(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    fields = {
+        "prompt_tokens", "completion_tokens", "total_tokens",
+        "cached_tokens", "input_tokens", "output_tokens",
+        "cache_read_input_tokens", "cache_creation_input_tokens",
+    }
+    usage = {
+        name: count for name, count in value.items()
+        if name in fields and type(count) is int and count >= 0
+    }
+    for name in ("prompt_tokens_details", "completion_tokens_details"):
+        details = value.get(name)
+        if isinstance(details, dict):
+            counters = {
+                key: count for key, count in details.items()
+                if key in {
+                    "cached_tokens", "reasoning_tokens", "audio_tokens",
+                    "accepted_prediction_tokens", "rejected_prediction_tokens",
+                } and type(count) is int and count >= 0
+            }
+            if counters:
+                usage[name] = counters
+    return usage
+
+
 def canary(
     workspace: Workspace,
     base_url: str,
@@ -892,14 +930,14 @@ def canary(
         "model": model,
         "max_tokens": max_tokens,
         "temperature": 0,
-        "thinking": {"type": "disabled"},
+        "chat_template_kwargs": {"enable_thinking": False},
         "messages": [{"role": "user", "content": prompt}],
     }
     started = time.perf_counter()
     created_at = datetime.now(UTC).isoformat()
     try:
         response = post_json(
-            f"{base_url}/v1/messages",
+            f"{base_url}/v1/chat/completions",
             payload,
             timeout,
             api_key=ensure_api_key(workspace),
@@ -912,7 +950,7 @@ def canary(
                 "model": model,
                 "status": "error",
                 "latency_seconds": round(time.perf_counter() - started, 6),
-                "error": str(error),
+                "error_type": type(error).__name__,
             },
         )
         raise
@@ -923,93 +961,294 @@ def canary(
         "resolved_model": response.get("model"),
         "status": "ok",
         "latency_seconds": round(time.perf_counter() - started, 6),
-        "usage": response.get("usage"),
-        "stop_reason": response.get("stop_reason"),
+        "usage": _completion_usage(response.get("usage")),
+        "stop_reason": next(
+            (
+                choice.get("finish_reason")
+                for choice in response.get("choices", [])
+                if isinstance(choice, dict)
+            ),
+            None,
+        ),
     }
     _append_request(workspace, record)
     return {"response": response, "metrics": record}
 
 
-def claude_environment(
-    base_url: str,
-    model_id: str,
-    api_key: str,
-    config_dir: Path | None = None,
-    max_context_tokens: int | None = None,
+def pi_environment(
+    workspace: Workspace,
+    api_key: str | None = None,
+    *,
+    inherited: dict[str, str] | None = None,
 ) -> dict[str, str]:
+    """Keep the local Pi process separate from ambient provider credentials."""
+    source = os.environ if inherited is None else inherited
+    prefixes = (
+        "ANTHROPIC_", "CLAUDE_", "OPENAI_", "AZURE_", "AWS_", "GOOGLE_",
+        "GCLOUD_", "COPILOT_", "HF_", "HUGGINGFACE_", "PI_",
+    )
     environment = {
-        "ANTHROPIC_BASE_URL": base_url,
-        "ANTHROPIC_API_KEY": api_key,
-        "ANTHROPIC_CUSTOM_MODEL_OPTION": model_id,
-        "ANTHROPIC_CUSTOM_MODEL_OPTION_NAME": "Geer Local",
-        "ANTHROPIC_CUSTOM_MODEL_OPTION_DESCRIPTION": "Local model served by Geer",
-        "ANTHROPIC_DEFAULT_OPUS_MODEL": model_id,
-        "ANTHROPIC_DEFAULT_SONNET_MODEL": model_id,
-        "ANTHROPIC_DEFAULT_HAIKU_MODEL": model_id,
-        "ANTHROPIC_MODEL": model_id,
-        "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS": "1",
-        "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
-        "CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL": "1",
-        "ENABLE_TOOL_SEARCH": "false",
+        name: value
+        for name, value in source.items()
+        if not name.startswith(prefixes)
+        and not name.endswith(("_API_KEY", "_AUTH_TOKEN", "_OAUTH_TOKEN"))
+        and name != "GEER_API_KEY"
     }
-    if config_dir is not None:
-        environment["CLAUDE_CONFIG_DIR"] = str(config_dir)
-    if max_context_tokens is not None:
-        environment["CLAUDE_CODE_MAX_CONTEXT_TOKENS"] = str(max_context_tokens)
+    environment.update({
+        "PI_CODING_AGENT_DIR": str(workspace.pi_config),
+        "PI_CODING_AGENT_SESSION_DIR": str(workspace.pi_config / "sessions"),
+        "PI_OFFLINE": "1",
+        "PI_SKIP_VERSION_CHECK": "1",
+        "PI_TELEMETRY": "0",
+    })
+    if api_key is not None:
+        environment["GEER_API_KEY"] = api_key
+    bypass = environment.get("NO_PROXY", environment.get("no_proxy", ""))
+    bypass = ",".join(filter(None, (bypass, "127.0.0.1", "localhost", "::1")))
+    environment["NO_PROXY"] = bypass
+    environment["no_proxy"] = bypass
     return environment
 
 
-def claude_arguments(
+def _pi_candidate(workspace: Workspace) -> str | None:
+    override = os.environ.get("GEER_PI_BIN")
+    if override:
+        candidate = Path(override).expanduser()
+        if not candidate.is_file() or not os.access(candidate, os.X_OK):
+            raise AssetError(f"GEER_PI_BIN is not an executable: {candidate}")
+        return str(candidate)
+    for candidate in (
+        workspace.runtime / "pi-runtime" / "pi" / "pi",
+        workspace.root / "build" / "pi-runtime" / "pi" / "pi",
+    ):
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return str(candidate)
+    return shutil.which("pi")
+
+
+def compatible_pi(workspace: Workspace, *, timeout: float = 10) -> str:
+    """Probe an existing pinned Pi executable without downloading or starting a model."""
+    command = _pi_candidate(workspace)
+    if command is None:
+        raise AssetError(
+            f"Pi {PI_VERSION} is missing. Run `geer setup`, or stage the pinned "
+            "development runtime with `uv run python tools/install_pi.py`."
+        )
+    try:
+        result = subprocess.run(
+            [command, "--version"],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            env=pi_environment(workspace),
+        )
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
+        raise AssetError(f"cannot run Pi at {command}: {error}") from error
+    match = re.search(r"\b(\d+)\.(\d+)\.(\d+)\b", result.stdout)
+    if match is None:
+        raise AssetError(f"cannot determine Pi version at {command}")
+    version = ".".join(match.groups())
+    if version != PI_VERSION:
+        raise AssetError(f"Pi {version} is unsupported; Geer requires pinned Pi {PI_VERSION}")
+    return command
+
+
+def bootstrap_pi(workspace: Workspace) -> dict[str, str]:
+    """Verify or install the managed runtime during explicit setup."""
+    if not os.environ.get("GEER_PI_BIN"):
+        try:
+            install_pi(workspace.runtime / "pi-runtime")
+        except PiDistributionError as error:
+            raise AssetError(str(error)) from error
+    command = compatible_pi(workspace)
+    return {
+        "pi": command,
+        "version": PI_VERSION,
+        "revision": PI_REVISION,
+        "config_directory": str(workspace.pi_config),
+    }
+
+
+def _private_json_object(path: Path) -> dict[str, Any]:
+    if path.is_symlink():
+        raise AssetError(f"refusing to replace unexpected Pi configuration symlink: {path}")
+    try:
+        value = json.loads(path.read_text()) if path.exists() else {}
+    except (OSError, json.JSONDecodeError) as error:
+        raise AssetError(f"cannot read Pi configuration from {path}: {error}") from error
+    if not isinstance(value, dict):
+        raise AssetError(f"Pi configuration must contain a JSON object: {path}")
+    return value
+
+
+def _write_private_json(path: Path, value: dict[str, Any]) -> None:
+    temporary: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", prefix=f".{path.name}.", dir=path.parent, delete=False,
+        ) as stream:
+            temporary = Path(stream.name)
+            temporary.chmod(0o600)
+            stream.write(json.dumps(value, indent=2, sort_keys=True) + "\n")
+        os.replace(temporary, path)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+
+
+def ensure_pi_config(
+    workspace: Workspace,
+    base_url: str,
+    manifest: dict[str, Any] | None = None,
+    *,
+    total_memory_bytes: int | None = None,
+) -> dict[str, Any]:
+    manifest = manifest or verify_assets(workspace)
+    config = workspace.pi_config
+    if config.is_symlink() or (config.exists() and not config.is_dir()):
+        raise AssetError(f"refusing to replace unexpected Pi config path: {config}")
+    config.mkdir(parents=True, exist_ok=True, mode=0o700)
+    config.chmod(0o700)
+    profile = select_hardware_profile(
+        total_memory_bytes,
+        native_context_window=int(manifest.get("context_length", 262_144)),
+    )
+    model_id = str(manifest["model_id"])
+    models = _private_json_object(config / "models.json")
+    providers = models.setdefault("providers", {})
+    if not isinstance(providers, dict):
+        raise AssetError("Pi models.json providers must contain a JSON object")
+    providers["geer"] = {
+        "baseUrl": f"{base_url.rstrip('/')}/v1",
+        "api": "openai-completions",
+        "apiKey": "${GEER_API_KEY}",
+        "authHeader": True,
+        "models": [{
+            "id": model_id,
+            "name": model_alias(manifest),
+            "reasoning": True,
+            "input": ["text"],
+            "contextWindow": profile.max_context_window,
+            "maxTokens": min(16_384, profile.max_context_window // 4),
+            "cost": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0},
+            "compat": {
+                "supportsStore": False,
+                "supportsDeveloperRole": False,
+                "supportsReasoningEffort": False,
+                "supportsStrictMode": False,
+                "maxTokensField": "max_tokens",
+                "thinkingFormat": "qwen-chat-template",
+            },
+        }],
+    }
+    settings = _private_json_object(config / "settings.json")
+    settings.update({
+        "defaultProvider": "geer",
+        "defaultModel": model_id,
+        "defaultThinkingLevel": "off",
+        "enabledModels": ["geer/*"],
+        "enableInstallTelemetry": False,
+        "enableAnalytics": False,
+    })
+    mcp = _private_json_object(config / "mcp.json")
+    servers = mcp.setdefault("mcpServers", {})
+    if not isinstance(servers, dict):
+        raise AssetError("Pi mcp.json mcpServers must contain a JSON object")
+    servers["semble"] = retrieval_mcp_config(workspace)["mcpServers"]["semble"]
+    _write_private_json(config / "models.json", models)
+    _write_private_json(config / "settings.json", settings)
+    _write_private_json(config / "mcp.json", mcp)
+    skills_directory = ensure_skills_directory(workspace)
+    return {
+        "config_directory": str(config),
+        "provider": "geer",
+        "model_id": model_id,
+        "model_name": model_alias(manifest),
+        "context_window": profile.max_context_window,
+        "skills_directory": str(skills_directory),
+    }
+
+
+def pi_arguments(
     workspace: Workspace,
     arguments: list[str],
+    manifest: dict[str, Any] | None = None,
+    *,
+    enable_tools: bool = True,
 ) -> list[str]:
-    if any(argument in {"--version", "-v"} for argument in arguments):
+    if any(argument in {"--version", "-v", "--help", "-h"} for argument in arguments):
         return arguments
-    return [
-        "--system-prompt",
-        geer_system_prompt(),
-        "--strict-mcp-config",
-        *retrieval_arguments(workspace),
-        *arguments,
+    manifest = manifest or verify_assets(workspace)
+    options = [
+        "--provider", "geer",
+        "--model", str(manifest["model_id"]),
+        "--models", "geer/*",
+        "--thinking", "off",
+        "--no-approve",
+        "--no-extensions",
+        "--no-skills",
+        "--no-prompt-templates",
+        "--no-themes",
     ]
+    system_prompt = geer_system_prompt(model_name=model_alias(manifest))
+    if enable_tools:
+        options.extend(["--extension", "builtin:mcp"])
+        for path in skill_paths(workspace):
+            options.extend(["--skill", str(path)])
+        system_prompt = f"{system_prompt}\n\n{RETRIEVAL_SYSTEM_PROMPT}"
+    else:
+        options.append("--no-tools")
+    options.extend(["--append-system-prompt", system_prompt])
+    return [*options, *arguments]
 
 
-def launch_claude(
+def prepare_pi(
     workspace: Workspace,
     arguments: list[str],
     *,
     ensure_server: bool = False,
     host: str = DEFAULT_HOST,
     port: int | None = None,
-) -> NoReturn:
+    enable_tools: bool = True,
+) -> tuple[list[str], dict[str, str]]:
+    command = compatible_pi(workspace)
+    if any(argument in {"--version", "-v", "--help", "-h"} for argument in arguments):
+        return [command, *arguments], pi_environment(workspace)
     manifest = verify_assets(workspace)
     if ensure_server:
         started = start_server(workspace, host, port)
         base_url = str(started["endpoint"])
     else:
         base_url = server_endpoint(workspace, host, port)
-    command = compatible_claude()
-    workspace.claude_config.mkdir(parents=True, exist_ok=True, mode=0o700)
-    workspace.claude_config.chmod(0o700)
-    ensure_user_skills_link(workspace)
-    environment = os.environ.copy()
-    context_length = manifest.get("context_length")
-    environment.update(
-        claude_environment(
-            base_url,
-            model_alias(manifest),
-            ensure_api_key(workspace),
-            workspace.claude_config,
-            context_length if isinstance(context_length, int) else None,
-        )
-    )
+    ensure_pi_config(workspace, base_url, manifest)
+    environment = pi_environment(workspace, ensure_api_key(workspace))
     record_launcher_status(
         workspace,
         "ready",
         endpoint_url=base_url,
-        detail="Starting Claude Code with the local Geer provider",
+        detail="Starting Pi with the local Geer provider",
     )
-    os.execvpe(command, [command, *claude_arguments(workspace, arguments)], environment)
+    return [
+        command, *pi_arguments(workspace, arguments, manifest, enable_tools=enable_tools),
+    ], environment
+
+
+def launch_pi(
+    workspace: Workspace,
+    arguments: list[str],
+    *,
+    ensure_server: bool = False,
+    host: str = DEFAULT_HOST,
+    port: int | None = None,
+    enable_tools: bool = True,
+) -> NoReturn:
+    command, environment = prepare_pi(
+        workspace, arguments, ensure_server=ensure_server, host=host, port=port,
+        enable_tools=enable_tools,
+    )
+    os.umask(0o077)
+    os.execvpe(command[0], command, environment)
 
 
 def record_launcher_status(
@@ -1028,10 +1267,7 @@ def record_launcher_status(
     }
     workspace.state.mkdir(parents=True, exist_ok=True, mode=0o700)
     workspace.state.chmod(0o700)
-    temporary = workspace.launcher_log.with_suffix(".json.tmp")
-    temporary.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n")
-    temporary.chmod(0o600)
-    os.replace(temporary, workspace.launcher_log)
+    _write_private_json(workspace.launcher_log, record)
 
 
 def launcher_status(workspace: Workspace) -> dict[str, Any] | None:
@@ -1126,36 +1362,6 @@ def ensure_model_settings(
     temporary.chmod(0o600)
     os.replace(temporary, path)
     return current
-
-
-def compatible_claude() -> str:
-    command = shutil.which("claude")
-    if command is None:
-        raise AssetError(
-            "Claude Code is missing. Install it using Anthropic's official "
-            f"instructions: {CLAUDE_INSTALL_URL}"
-        )
-    try:
-        result = subprocess.run(
-            [command, "--version"],
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
-        raise AssetError(f"cannot run Claude Code at {command}: {error}") from error
-    match = re.search(r"\b(\d+)\.(\d+)\.(\d+)\b", result.stdout)
-    if match is None:
-        raise AssetError(f"cannot determine Claude Code version from: {result.stdout.strip()}")
-    version = tuple(int(part) for part in match.groups())
-    if version < MIN_CLAUDE_VERSION:
-        minimum = ".".join(str(part) for part in MIN_CLAUDE_VERSION)
-        raise AssetError(
-            f"Claude Code {'.'.join(match.groups())} is unsupported; "
-            f"Geer requires {minimum} or newer"
-        )
-    return command
 
 
 def _append_request(workspace: Workspace, record: dict[str, Any]) -> None:

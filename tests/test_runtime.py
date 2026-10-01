@@ -10,11 +10,8 @@ import pytest
 from geer.assets import AssetError, Workspace, model_alias
 from geer.cli import parser
 from geer.hardware import GIB
-from geer.prompt import geer_system_prompt
-from geer.retrieval import RETRIEVAL_SYSTEM_PROMPT, retrieval_mcp_config
 from geer.runtime import (
     CACHE_MAX_SIZE,
-    CLAUDE_INSTALL_URL,
     HOT_CACHE_MAX_SIZE,
     OMLX_ARCHIVE_URL,
     OMLX_OVERRIDES,
@@ -24,14 +21,9 @@ from geer.runtime import (
     _install_runtime_components,
     _replace_runtime_prefix,
     cache_directory,
-    claude_arguments,
-    claude_environment,
-    compatible_claude,
     default_port,
     ensure_api_key,
     ensure_model_settings,
-    launch_claude,
-    launcher_status,
     run_server,
     serve_command,
     snapshot_runtime,
@@ -86,28 +78,7 @@ def test_runtime_install_preserves_models_and_cache(tmp_path: Path) -> None:
     assert json.loads((workspace.runtime / "runtime.json").read_text()) == {"version": "new"}
 
 
-def test_claude_environment_routes_every_model_tier_locally() -> None:
-    environment = claude_environment(
-        "http://127.0.0.1:8765",
-        "geer-local",
-        "local-secret",
-        Path("/tmp/geer-claude"),
-        262_144,
-    )
-
-    assert environment["ANTHROPIC_BASE_URL"] == "http://127.0.0.1:8765"
-    assert environment["ANTHROPIC_API_KEY"] == "local-secret"
-    assert "ANTHROPIC_AUTH_TOKEN" not in environment
-    assert environment["ANTHROPIC_MODEL"] == "geer-local"
-    assert {
-        environment["ANTHROPIC_DEFAULT_OPUS_MODEL"],
-        environment["ANTHROPIC_DEFAULT_SONNET_MODEL"],
-        environment["ANTHROPIC_DEFAULT_HAIKU_MODEL"],
-    } == {"geer-local"}
-    assert environment["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] == "1"
-    assert environment["CLAUDE_CODE_MAX_CONTEXT_TOKENS"] == "262144"
-    assert environment["ENABLE_TOOL_SEARCH"] == "false"
-    assert environment["CLAUDE_CONFIG_DIR"] == "/tmp/geer-claude"
+def test_runtime_dependencies_have_immutable_revisions() -> None:
     assert len(OMLX_REVISION) == 40
     assert OMLX_REVISION in OMLX_ARCHIVE_URL
     assert "git+" not in OMLX_ARCHIVE_URL
@@ -144,43 +115,11 @@ def test_api_key_is_private_and_stable(tmp_path: Path) -> None:
     assert workspace.api_key.stat().st_mode & 0o777 == 0o600
 
 
-def test_claude_arguments_use_minimal_explicit_configuration() -> None:
-    workspace = Workspace(Path("/tmp/geer-test"))
-    arguments = claude_arguments(workspace, ["--print", "hello"])
-    assert arguments[:2] == [
-        "--system-prompt",
-        geer_system_prompt(),
-    ]
-    assert arguments[2:4] == ["--strict-mcp-config", "--mcp-config"]
-    assert json.loads(arguments[4]) == retrieval_mcp_config(workspace)
-    assert arguments[5:7] == ["--append-system-prompt", RETRIEVAL_SYSTEM_PROMPT]
-    assert arguments[-2:] == ["--print", "hello"]
-    assert claude_arguments(workspace, ["--version"]) == ["--version"]
-
-
-def test_claude_parser_leaves_cli_flags_for_claude_code() -> None:
-    options, remaining = parser().parse_known_args(["claude", "-p", "hello"])
-
-    assert options.command == "claude"
-    assert remaining == ["-p", "hello"]
-
-
 def test_launch_parser_leaves_cli_flags_for_t3() -> None:
     options, remaining = parser().parse_known_args(["launch", "--resume", "thread"])
 
     assert options.command == "launch"
     assert remaining == ["--resume", "thread"]
-
-
-def test_missing_claude_is_actionable_without_a_tty(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr("geer.runtime.shutil.which", lambda name: None)
-
-    with pytest.raises(AssetError, match="official instructions") as error:
-        compatible_claude()
-
-    assert CLAUDE_INSTALL_URL in str(error.value)
 
 
 def test_serve_command_refuses_non_loopback(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -418,46 +357,6 @@ def test_start_server_persists_automatic_fallback_endpoint(
     assert endpoint_record["port"] == 9123
     assert endpoint_record["endpoint"] == "http://127.0.0.1:9123"
     assert workspace.server_endpoint.stat().st_mode & 0o777 == 0o600
-
-
-def test_launch_claude_records_selected_endpoint_before_exec(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    workspace = Workspace(tmp_path)
-    manifest = {
-        "model_id": "geer-local",
-        "context_length": 262_144,
-        "build": {"display_name": "Geer Test Model"},
-    }
-    monkeypatch.setattr("geer.runtime.verify_assets", lambda value: manifest)
-    monkeypatch.setattr(
-        "geer.runtime.start_server",
-        lambda *args, **kwargs: {
-            "server": "online",
-            "endpoint": "http://127.0.0.1:9123",
-        },
-    )
-    monkeypatch.setattr("geer.runtime.compatible_claude", lambda: "/bin/claude")
-    monkeypatch.setattr(
-        "geer.runtime.claude_arguments",
-        lambda workspace, arguments, **kwargs: arguments,
-    )
-
-    def stop_before_exec(command, arguments, environment):
-        assert environment["CLAUDE_CODE_MAX_CONTEXT_TOKENS"] == "262144"
-        raise RuntimeError("exec reached")
-
-    monkeypatch.setattr("geer.runtime.os.execvpe", stop_before_exec)
-
-    with pytest.raises(RuntimeError, match="exec reached"):
-        launch_claude(workspace, ["--print", "hello"], ensure_server=True)
-
-    record = launcher_status(workspace)
-    assert record is not None
-    assert record["status"] == "ready"
-    assert record["endpoint"] == "http://127.0.0.1:9123"
-    assert workspace.launcher_log.stat().st_mode & 0o777 == 0o600
 
 
 def test_start_server_rejects_unmanaged_healthy_endpoint(

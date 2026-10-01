@@ -8,7 +8,10 @@ import pytest
 
 from geer.assets import Workspace
 from geer.hardware import GIB, select_hardware_profile
-from geer.models import install_model, model_plan, recipe_and_installer
+from geer.models import TEMPORARY_SPACE_BYTES, install_model, model_plan, recipe_and_installer
+from geer.pi_distribution import PI_ARCHIVE_BYTES, PI_EXTRACTED_BYTES
+from geer.runtime import RUNTIME_ARCHIVE_BYTES, RUNTIME_INSTALLED_BYTES
+from geer.t3_distribution import T3_ARCHIVE_BYTES, T3_INSTALLED_BYTES
 
 
 def fake_model_installer(tmp_path: Path) -> SimpleNamespace:
@@ -88,6 +91,22 @@ def test_model_plan_selects_the_matching_distribution(
     assert plan["repo_id"] == repo_id
     assert plan["context_window"] == context_window
     assert plan["kv_cache"] == "BF16"
+    assert plan["t3_download_bytes"] == T3_ARCHIVE_BYTES
+    assert plan["t3_download_human"] == f"{T3_ARCHIVE_BYTES} bytes"
+    assert plan["t3_installed_bytes"] == T3_INSTALLED_BYTES
+    assert plan["t3_installed_human"] == f"{T3_INSTALLED_BYTES} bytes"
+    cold_install_bytes = (
+        plan["installed_bytes"]
+        + RUNTIME_ARCHIVE_BYTES
+        + RUNTIME_INSTALLED_BYTES
+        + PI_ARCHIVE_BYTES
+        + PI_EXTRACTED_BYTES
+        + T3_ARCHIVE_BYTES
+        + T3_INSTALLED_BYTES
+        + TEMPORARY_SPACE_BYTES
+    )
+    assert plan["required_free_bytes"] == cold_install_bytes
+    assert plan["required_free_human"] == f"{cold_install_bytes} bytes"
 
 
 def test_model_plan_reuses_only_the_selected_recipe(

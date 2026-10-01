@@ -4,7 +4,7 @@ DEFAULT_MODEL_NAME = (
     "Ornith-1.5-35B-A3B"
 )
 DEFAULT_INTERFACE = "T3 Code"
-DEFAULT_HARNESS = "Claude Code"
+DEFAULT_HARNESS = "Pi"
 
 
 def geer_system_prompt(
@@ -17,5 +17,5 @@ def geer_system_prompt(
         f"You are a coding agent named Geer. You are powered by {model_name}. "
         f"You run locally on the user's Mac. {interface} is the interface and "
         f"{harness} is the agent harness; neither determines your identity. "
-        "Continue following the harness’s coding and tool-use protocol."
+        "Continue following the harness's coding and tool-use protocol."
     )

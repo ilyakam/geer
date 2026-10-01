@@ -1,4 +1,5 @@
 import AppKit
+import CoreFoundation
 import SwiftUI
 
 private let setupCommand = "/usr/local/bin/geer"
@@ -101,7 +102,7 @@ final class SetupViewModel: ObservableObject {
 
     @Published var state: State = .welcome
     @Published var headline = "Set up private, local coding"
-    @Published var detail = "Geer will prepare its local engine, reuse any verified model already on this Mac, connect repository search, and optionally configure T3 Code."
+    @Published var detail = "Geer prepares its local engine and repository search, reuses verified model data, and installs Pi and T3 Code automatically."
     @Published var phaseTitle = "Ready to begin"
     @Published var completed = 0.0
     @Published var total = 5.0
@@ -119,9 +120,18 @@ final class SetupViewModel: ObservableObject {
     private var input: FileHandle?
     private var stdoutBuffer = Data()
     private var pendingDecisionID: String?
+    private var exitStatus: Int32?
+    private var stdoutFinished = false
+    private var t3ApplicationURL: URL?
 
     func begin() {
         guard process == nil else { return }
+        stdoutBuffer.removeAll(keepingCapacity: true)
+        exitStatus = nil
+        stdoutFinished = false
+        decisionPrompt = nil
+        pendingDecisionID = nil
+        t3ApplicationURL = nil
         state = .running
         headline = "Preparing Geer"
         detail = "You can safely cancel and relaunch setup. Verified model files are retained."
@@ -138,49 +148,77 @@ final class SetupViewModel: ObservableObject {
         self.process = process
         self.input = stdin.fileHandleForWriting
 
-        stdout.fileHandleForReading.readabilityHandler = { [weak self] handle in
-            let data = handle.availableData
-            guard !data.isEmpty else { return }
-            Task { @MainActor in self?.consume(data) }
-        }
         stderr.fileHandleForReading.readabilityHandler = { [weak self] handle in
             let data = handle.availableData
             guard let text = String(data: data, encoding: .utf8), !text.isEmpty else { return }
-            Task { @MainActor in self?.appendLog(text) }
+            Task { @MainActor [weak self] in
+                guard let self, self.process === process else { return }
+                self.appendLog(text)
+            }
         }
         process.terminationHandler = { [weak self] process in
-            Task { @MainActor in
-                guard let self else { return }
-                stdout.fileHandleForReading.readabilityHandler = nil
-                stderr.fileHandleForReading.readabilityHandler = nil
-                self.process = nil
-                self.input = nil
-                if process.terminationStatus != 0 && self.state == .running {
-                    self.fail("Setup stopped before it finished. Your existing model and completed downloads were kept.")
-                }
+            stderr.fileHandleForReading.readabilityHandler = nil
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.process === process else { return }
+                self.exitStatus = process.terminationStatus
+                self.finishIfExited()
             }
         }
 
         do {
             try process.run()
+            DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+                while true {
+                    let data = stdout.fileHandleForReading.availableData
+                    if data.isEmpty { break }
+                    DispatchQueue.main.async { [weak self] in
+                        guard let self, self.process === process else { return }
+                        self.consume(data)
+                    }
+                }
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, self.process === process else { return }
+                    self.stdoutFinished = true
+                    self.finishIfExited()
+                }
+            }
         } catch {
+            stderr.fileHandleForReading.readabilityHandler = nil
+            self.process = nil
+            self.input = nil
             fail("Could not start the installed Geer command: \(error.localizedDescription)")
         }
     }
 
     private func consume(_ data: Data) {
+        guard state != .failed && state != .cancelled else { return }
         stdoutBuffer.append(data)
         while let newline = stdoutBuffer.firstIndex(of: 0x0A) {
             let line = stdoutBuffer.prefix(upTo: newline)
             stdoutBuffer.removeSubrange(...newline)
             guard let object = try? JSONSerialization.jsonObject(with: line) as? [String: Any] else {
-                continue
+                fail("The installed Geer command returned invalid setup data. Run geer setup in a terminal to inspect the failure.")
+                return
             }
-            Task { @MainActor in self.handle(object) }
+            handle(object)
+        }
+    }
+
+    private func finishIfExited() {
+        guard stdoutFinished, let exitStatus else { return }
+        self.process = nil
+        self.input = nil
+        if !stdoutBuffer.isEmpty && state != .failed && state != .cancelled {
+            fail("The setup command ended with incomplete setup data. Run geer setup to finish.")
+        } else if exitStatus != 0 && state != .failed && state != .cancelled {
+            fail("The setup command exited with status \(exitStatus). Your existing model and completed downloads were kept. Run geer setup to retry.")
+        } else if state == .running {
+            fail("Setup ended without confirming that Geer and T3 Code are ready. Run geer setup to finish.")
         }
     }
 
     private func handle(_ event: [String: Any]) {
+        guard state != .failed && state != .cancelled else { return }
         guard (event["protocol_version"] as? Int) == 1 else {
             fail("This setup application and the installed Geer command use incompatible protocols.")
             return
@@ -206,18 +244,36 @@ final class SetupViewModel: ObservableObject {
             defaultDecision = event["default"] as? String ?? "yes"
             decisionPrompt = event["prompt"] as? String
         case "completed":
-            let result = event["result"] as? [String: Any]
-            if result?["status"] as? String == "cancelled" {
+            guard let result = event["result"] as? [String: Any],
+                  let status = result["status"] as? String else {
+                fail("The setup command returned an invalid completion result. Run geer setup to finish.")
+                return
+            }
+            if status == "cancelled" {
                 state = .cancelled
-                headline = "No changes were made"
+                headline = "Setup cancelled"
                 phaseTitle = "Setup cancelled"
                 detail = "You can begin again here or run geer setup from a terminal. Existing model data was kept."
-            } else {
+            } else if status == "ready" {
+                guard let configured = result["t3_configured"] as? NSNumber,
+                      CFGetTypeID(configured) == CFBooleanGetTypeID(),
+                      configured.boolValue else {
+                    fail("Setup did not confirm that T3 Code is configured. Run geer setup to finish.")
+                    return
+                }
+                guard let path = result["t3_application_path"] as? String,
+                      path.hasPrefix("/"), !path.contains("\0") else {
+                    fail("Setup did not return an absolute T3 Code application path. Run geer setup to finish.")
+                    return
+                }
+                t3ApplicationURL = URL(fileURLWithPath: path)
                 state = .ready
                 headline = "Geer is ready"
                 phaseTitle = "Setup completed"
                 completed = total
-                detail = "The local engine and repository retrieval passed their checks. You can close this window."
+                detail = "Open a project in T3 Code, select the Geer model, and use Full access. On first launch, choose Continue to proceed without cloud sign-in."
+            } else {
+                fail("The setup command returned an unknown completion status: \(status). Run geer setup to finish.")
             }
         case "failed":
             fail(event["message"] as? String ?? "Setup could not be completed.")
@@ -251,10 +307,20 @@ final class SetupViewModel: ObservableObject {
         phaseTitle = "Safe to resume"
         process.terminate()
         self.process = nil
+        self.input = nil
+        decisionPrompt = nil
+        pendingDecisionID = nil
     }
 
     func openTerminalFallback() {
         NSWorkspace.shared.open(URL(fileURLWithPath: fallbackCommand))
+    }
+
+    func openT3Code() {
+        guard state == .ready, let t3ApplicationURL else { return }
+        if !NSWorkspace.shared.open(t3ApplicationURL) {
+            fail("Could not open T3 Code at \(t3ApplicationURL.path). Open the application manually or run geer setup to verify it.")
+        }
     }
 
     func copyLogs() {
@@ -269,9 +335,13 @@ final class SetupViewModel: ObservableObject {
 
     private func fail(_ message: String) {
         state = .failed
-        headline = "Geer needs your help"
+        headline = "Geer setup failed"
         detail = message
         phaseTitle = "Setup did not finish"
+        decisionPrompt = nil
+        pendingDecisionID = nil
+        t3ApplicationURL = nil
+        if process?.isRunning == true { process?.terminate() }
     }
 }
 
@@ -309,7 +379,7 @@ struct SetupView: View {
                             systemImage: "arrow.triangle.2.circlepath"
                         )
                         SetupFeatureRow(
-                            text: "Claude Code and T3 Code are checked, not bundled",
+                            text: "Pi and T3 Code are installed and verified automatically; existing installations are reused",
                             systemImage: "app.badge.checkmark"
                         )
                     }.frame(maxWidth: .infinity, alignment: .leading)
@@ -369,7 +439,8 @@ struct SetupView: View {
                 } else if model.state == .failed || model.state == .cancelled {
                     Button("Try Again") { model.begin() }.keyboardShortcut(.defaultAction)
                 } else {
-                    Button("Close") { NSApplication.shared.terminate(nil) }.keyboardShortcut(.defaultAction)
+                    Button("Close") { NSApplication.shared.terminate(nil) }.keyboardShortcut(.cancelAction)
+                    Button("Open T3 Code") { model.openT3Code() }.keyboardShortcut(.defaultAction)
                 }
             }
         }
