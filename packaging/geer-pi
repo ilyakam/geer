@@ -2,7 +2,7 @@
 set -eu
 
 if test "$#" -eq 1 && test "$1" = "--version"; then
-  exec /usr/local/bin/geer claude --version
+  exec /usr/local/bin/geer pi --version
 fi
 
 exec /usr/local/bin/geer launch "$@"

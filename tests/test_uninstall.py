@@ -7,7 +7,13 @@ from pathlib import Path
 import pytest
 
 from geer.assets import Workspace
-from geer.uninstall import _remove_installation, directory_size, uninstall
+from geer.uninstall import INSTALL_PATHS, _remove_installation, directory_size, uninstall
+
+
+def test_uninstall_removes_geer_launchers_and_retains_user_harnesses() -> None:
+    assert Path("/usr/local/bin/geer-pi") in INSTALL_PATHS
+    assert Path("/usr/local/bin/geer-claude") in INSTALL_PATHS
+    assert not any(path.name in {"pi", "claude", ".geer", ".pi"} for path in INSTALL_PATHS)
 
 
 def test_uninstall_declines_without_changing_anything(
@@ -85,6 +91,27 @@ def test_directory_size_uses_disk_usage(
     )
 
     assert directory_size(home) == 2 * 1024**2
+
+
+def test_uninstall_uses_selected_t3_profile_and_preserves_desktop(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    profile = tmp_path / "selected-t3"
+    monkeypatch.setenv("T3CODE_HOME", str(profile))
+    monkeypatch.setattr("geer.uninstall._server_running", lambda value: False)
+    monkeypatch.setattr("geer.uninstall.stop_server", lambda value: {"stopped": False})
+    monkeypatch.setattr("geer.uninstall.directory_size", lambda value: 0)
+    monkeypatch.setattr("geer.uninstall._remove_installation", lambda paths: None)
+    selected: list[Path] = []
+
+    def remove(path: Path):
+        selected.append(path)
+        return {"removed": False}
+
+    monkeypatch.setattr("geer.uninstall.remove_t3", remove)
+    assert uninstall(Workspace(tmp_path), assume_yes=True)["status"] == "uninstalled"
+    assert selected == [profile / "userdata/settings.json"]
+    assert not any(path.suffix == ".app" and "T3" in path.name for path in INSTALL_PATHS)
 
 
 def test_remove_installation_uses_only_existing_fixed_paths(

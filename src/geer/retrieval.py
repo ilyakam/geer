@@ -19,7 +19,8 @@ from .assets import AssetError, Workspace
 SEMBLE_VERSION = "0.5.2"
 SEMBLE_MODEL = "minishlab/potion-code-16M-v2"
 RETRIEVAL_SYSTEM_PROMPT = (
-    "Use the Semble MCP tools first when discovering unfamiliar repository code, "
+    "Use mcp__semble__search and mcp__semble__find_related first when discovering "
+    "unfamiliar repository code, "
     "behavior, symbols, or architecture. Navigate directly to returned file and line "
     "locations. Use grep only for exhaustive literal confirmation, not to repeat the "
     "same discovery search."
@@ -43,22 +44,15 @@ def retrieval_mcp_config(workspace: Workspace) -> dict[str, Any]:
             "semble": {
                 "command": str(semble_command()),
                 "args": ["--content", "all"],
+                "exposure": "direct",
+                "timeout": 600,
                 "env": {
                     "SEMBLE_CACHE_LOCATION": str(workspace.retrieval_cache),
+                    "PYINSTALLER_RESET_ENVIRONMENT": "1",
                 },
             }
         }
     }
-
-
-def retrieval_arguments(workspace: Workspace) -> list[str]:
-    config = json.dumps(retrieval_mcp_config(workspace), separators=(",", ":"))
-    return [
-        "--mcp-config",
-        config,
-        "--append-system-prompt",
-        RETRIEVAL_SYSTEM_PROMPT,
-    ]
 
 
 def retrieval_status(workspace: Workspace) -> dict[str, Any]:

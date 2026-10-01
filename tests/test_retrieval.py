@@ -19,6 +19,8 @@ def test_retrieval_mcp_config_is_private_and_pinned(tmp_path: Path) -> None:
 
     assert Path(server["command"]).name == "semble"
     assert server["args"] == ["--content", "all"]
+    assert server["exposure"] == "direct"
+    assert server["timeout"] == 600
     assert server["env"]["SEMBLE_CACHE_LOCATION"] == str(workspace.retrieval_cache)
     assert workspace.retrieval_cache.stat().st_mode & 0o777 == 0o700
     assert SEMBLE_VERSION == "0.5.2"

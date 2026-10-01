@@ -112,8 +112,8 @@ class Workspace:
         return self.state / "api-key"
 
     @property
-    def claude_config(self) -> Path:
-        return self.runtime / "claude"
+    def pi_config(self) -> Path:
+        return self.runtime / "pi"
 
     @property
     def omlx_state(self) -> Path:
