@@ -12,6 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Experiment history with results, limitations, and conditions for revisiting.
 - Forward images to supported models through Pi
 
+### Changed
+
+- Upgrade the pinned Pi harness to official stable 1.4.0.
+
 ### Fixed
 
 - Accept ACP stdio MCP servers from current T3 Code alongside HTTP servers.

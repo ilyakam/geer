@@ -271,7 +271,7 @@ def test_probes_advertise_selected_model_without_starting_runtime(rig, capsys):
     assert not rig.workspace.runtime.exists()
     assert "logged in" not in models_output(rig.workspace).lower()
     assert run_acp(rig.workspace, ["--version"]) == 0
-    assert "0.99.1" in capsys.readouterr().out
+    assert "1.4.0" in capsys.readouterr().out
 
 
 def test_approval_required_chat_fails_before_any_pi_or_file_mutation(rig):
@@ -785,6 +785,7 @@ def test_cached_native_pi_cancel_stops_prompt_after_delayed_preflight(
 ''')
     extension.chmod(0o600)
     preflight = threading.Event()
+    abort_requested = threading.Event()
     milestones = []
     commands = []
 
@@ -817,6 +818,8 @@ def test_cached_native_pi_cancel_stops_prompt_after_delayed_preflight(
 
         def request(command, **fields):
             commands.append(command)
+            if command == "abort":
+                abort_requested.set()
             response = original_request(command, **fields)
             if command == "abort":
                 milestones.append("abort returned")
@@ -833,12 +836,23 @@ def test_cached_native_pi_cancel_stops_prompt_after_delayed_preflight(
          prompt=[{"type": "text", "text": "Delayed first turn"}, *([IMAGE] if with_image else [])])
     assert preflight.wait(3)
     state = bridge.sessions[session_id].rpc("get_state")
-    assert not state["isStreaming"] and not state["isCompacting"]
-    call(bridge, None, "session/cancel", sessionId=session_id)
-    assert milestones == ["abort returned"]
-    release.write_text("release")
+    # Pi 1.4 marks the run busy while before_agent_start handlers are pending.
+    assert state["isStreaming"] and not state["isCompacting"]
+    cancelling = threading.Thread(
+        target=call, args=(bridge, None, "session/cancel"), kwargs={"sessionId": session_id},
+    )
+    cancelling.start()
+    try:
+        assert abort_requested.wait(3)
+        # Pi 1.4 remembers this abort and waits until the pending run settles.
+        assert milestones == []
+        assert cancelling.is_alive()
+    finally:
+        release.write_text("release")
+        cancelling.join(timeout=3)
+    assert not cancelling.is_alive()
     assert wait_result(bridge, 3)["result"]["stopReason"] == "cancelled"
-    assert milestones == ["abort returned", "agent started", "abort returned"]
+    assert milestones == ["agent started", "abort returned", "abort returned"]
     assert [command for command in commands if command in {"clear_queue", "abort"}] == [
         "clear_queue", "abort", "clear_queue", "abort",
     ]

@@ -18,8 +18,8 @@ ROOT = Path(__file__).resolve().parents[1]
 @pytest.fixture
 def pi_archive(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     files = {
-        "pi": b"#!/bin/sh\necho 0.99.1\n",
-        "package.json": b'{"version":"0.99.1"}',
+        "pi": b"#!/bin/sh\necho 1.4.0\n",
+        "package.json": b'{"version":"1.4.0"}',
         "theme/dark.json": b'{"colors":{}}',
         "photon_rs_bg.wasm": b"synthetic wasm",
     }
@@ -61,7 +61,7 @@ def test_distribution_plan_never_reads_or_downloads(
 
     result = distribution.pi_distribution_plan(destination)
 
-    assert result["archive"]["bytes"] == 31_069_587
+    assert result["archive"]["bytes"] == 31_098_931
     assert result["executable"] == str(destination / "pi/pi")
     assert not destination.exists()
 

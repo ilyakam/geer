@@ -231,7 +231,7 @@ def test_compatible_pi_requires_exact_pinned_version_without_downloads(
 
 def test_pi_version_probe_can_respect_t3_inspection_timeout(tmp_path, monkeypatch):
     command = tmp_path / "slow-pi"
-    command.write_text(f"#!{sys.executable}\nimport time\ntime.sleep(5)\nprint('0.99.1')\n")
+    command.write_text(f"#!{sys.executable}\nimport time\ntime.sleep(5)\nprint('1.4.0')\n")
     command.chmod(0o755)
     monkeypatch.setenv("GEER_PI_BIN", str(command))
     started = time.monotonic()

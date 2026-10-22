@@ -107,7 +107,7 @@ def test_status_requires_pi_and_t3_even_with_an_online_engine(
                 "version": "0.0.44",
                 **({} if t3_ready else {"error": "T3 Code provider is disabled"}),
             },
-            "pi": {"status": "ready", "version": "0.99.1"}
+            "pi": {"status": "ready", "version": "1.4.0"}
             if pi_ready
             else {
                 "status": "unavailable",
@@ -118,7 +118,7 @@ def test_status_requires_pi_and_t3_even_with_an_online_engine(
     output = capsys.readouterr().out
     if pi_ready and t3_ready:
         assert "Geer is ready" in output
-        assert "Harness    Pi 0.99.1" in output
+        assert "Harness    Pi 1.4.0" in output
         assert "install or repair" not in output
     else:
         assert "Geer is ready" not in output

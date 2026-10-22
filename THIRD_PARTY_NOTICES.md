@@ -18,15 +18,19 @@ distribution and download manifests are the canonical immutable inputs.
 
 ## Pi installation
 
-Geer setup downloads Pi 0.99.1 directly from its
-[official upstream release](https://github.com/earendil-works/pi/releases/tag/v0.99.1).
+Geer setup downloads Pi 1.4.0 directly from its
+[official upstream release](https://github.com/earendil-works/pi/releases/tag/v1.4.0).
 The installer ships Geer's adapter and the integrity/provenance manifest in
 `packaging/pi-runtime.json`; it does not redistribute the standalone Pi binary.
-The manifest pins source revision `d86654abb8862e201933517d6f1fce9f88dd117f` and
-links the release's corresponding source archive.
+The manifest pins source revision `4a080252f06caf63a525d7873c5d94d3c23887e0` and
+links the release's corresponding source archive. The Darwin arm64 archive is
+31,098,931 bytes with SHA-256
+`79d9979d76a2a5adb7c28e27e9b44629928ccd0dc9fbb6ae7217860bd5e8be5d`.
+The source archive is 8,180,850 bytes with SHA-256
+`12b14a5d812e049a0b22449e2589ee7647c31f00f93bb97d8d25aff0e71920da`.
 
 Pi's original code is MIT licensed, copyright Mario Zechner 2025. See its
-[license at the pinned revision](https://github.com/earendil-works/pi/blob/d86654abb8862e201933517d6f1fce9f88dd117f/LICENSE).
+[license at the pinned revision](https://github.com/earendil-works/pi/blob/4a080252f06caf63a525d7873c5d94d3c23887e0/LICENSE).
 The upstream standalone distribution embeds Bun 1.3.14 and other dependencies
 with their own terms. Bun's
 [license and third-party notices](https://github.com/oven-sh/bun/blob/bun-v1.3.14/LICENSE.md)

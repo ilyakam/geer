@@ -27,10 +27,10 @@ def test_find_pi_uses_verified_distribution(monkeypatch, tmp_path: Path) -> None
     command = tmp_path / "pi"
     command.touch(mode=0o755)
     monkeypatch.setattr("geer.onboarding.compatible_pi", lambda workspace: str(command))
-    monkeypatch.setattr("geer.onboarding._version", lambda command: "0.99.1")
+    monkeypatch.setattr("geer.onboarding._version", lambda command: "1.4.0")
     result = find_pi()
     assert result.found is True
-    assert result.version == "0.99.1"
+    assert result.version == "1.4.0"
     assert result.path == command
 
 
@@ -289,7 +289,7 @@ def test_real_distribution_error_is_reported_and_marks_setup_failed(
 @pytest.fixture
 def integration_environment(tmp_path: Path, monkeypatch):
     app = tmp_path / "T3 Code.app"
-    monkeypatch.setattr("geer.onboarding.find_pi", lambda: Prerequisite(True, "0.99.1"))
+    monkeypatch.setattr("geer.onboarding.find_pi", lambda: Prerequisite(True, "1.4.0"))
     monkeypatch.setattr("geer.onboarding.find_t3", lambda: T3Application(True, "0.0.44", app))
     monkeypatch.setattr(
         "geer.onboarding.t3_settings_path", lambda: tmp_path / ".t3/userdata/settings.json"
