@@ -269,7 +269,7 @@ Never commit, upload, or include in an issue or pull request:
 - credentials, tokens, OAuth files, or license data;
 - raw harness request dumps;
 - private prompt, KV, retrieval, or conversation caches;
-- files from `.geer/` or `ai-refs/`;
+- files from `.geer/`;
 - local model caches, candidates, or weights outside the reviewed publication
   workflow;
 - proprietary prompts, tools, skills, workflows, hooks, plugins, or binaries.

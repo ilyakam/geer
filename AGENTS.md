@@ -18,6 +18,16 @@ engine for inference and Semble over MCP for repository retrieval.
 - `model-distributions/` pins installation revisions. `model-recipes/` and
   `model-cards/` record conversion provenance and licenses.
 
+## Experiment history
+
+Before model, quantization, runtime, or benchmark work, search
+[the experiment ledger](docs/experiments/README.md) and matching dated records.
+Consult `geer-private/experiments/` when accessible; flag incomplete history
+when it is unavailable. Compare exact artifacts and previous blockers, and
+explain what changed before repeating a trial. Record outcomes and concrete
+revisit conditions. Keep working research private and publish summaries only
+after explicit maintainer review, following the ledger's publication rules.
+
 ## Guardrails
 
 - Preserve `~/.geer`, caches, and the active model across cancellation, retry,
