@@ -8,7 +8,7 @@ from pathlib import Path
 
 capture = Path(sys.argv[1])
 state = {
-    "pid": os.getpid(), "args": sys.argv[2:], "methods": [],
+    "pid": os.getpid(), "args": sys.argv[2:], "methods": [], "requests": [],
     "env": {name: os.environ.get(name) for name in (
         "ELECTRON_RUN_AS_NODE", "T3_ACP_MCP_ENDPOINT", "T3_ACP_MCP_AUTHORIZATION",
     )},
@@ -19,6 +19,7 @@ try:
         request = json.loads(line)
         method = request["method"]
         state["methods"].append(method)
+        state["requests"].append(request)
         capture.write_text(json.dumps(state))
         if "id" not in request:
             continue
@@ -31,10 +32,15 @@ try:
         elif method == "tools/list":
             result = {"tools": [{
                 "name": "fixture_echo", "description": "Synthetic echo",
-                "inputSchema": {"type": "object", "properties": {}},
+                "inputSchema": {
+                    "type": "object", "properties": {"text": {"type": "string"}},
+                    "required": ["text"], "additionalProperties": False,
+                },
             }]}
         elif method == "tools/call":
-            result = {"content": [{"type": "text", "text": "synthetic-echo"}]}
+            result = {"content": [{
+                "type": "text", "text": "echo:" + request["params"]["arguments"]["text"],
+            }], "isError": False}
         elif method == "ping":
             result = {}
         else:

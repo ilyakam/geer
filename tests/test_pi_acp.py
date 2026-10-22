@@ -1472,7 +1472,8 @@ def test_cached_native_pi_connects_mcp_stdio_without_inference_and_stops_it(tmp_
             assert process.request("prompt", timeout=5, message="/fixture-tools") == {
                 "disposition": "handled",
             }
-            if any(tool["name"] == "mcp__t3-code__fixture_echo"
+            # Pinned Pi normalizes '-' to '_' in native MCP tool names.
+            if any(tool["name"] == "mcp__t3_code__fixture_echo"
                    for tool in json.loads(tools.read_text())):
                 break
             time.sleep(0.02)

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import os
 import queue
 import subprocess
+import sys
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -16,7 +18,8 @@ from geer.pi_distribution import PI_VERSION
 from geer.runtime import pi_arguments, pi_environment
 
 
-def test_cached_native_pi_dynamic_mcp_tools_survive_resume(tmp_path, monkeypatch):
+@pytest.mark.parametrize("transport", ["http", "stdio"])
+def test_cached_native_pi_dynamic_mcp_tools_survive_resume(tmp_path, monkeypatch, transport):
     binary = Path(__file__).resolve().parents[1] / "build/pi-runtime/pi/pi"
     if not binary.is_file():
         pytest.skip("cached pinned Pi runtime is unavailable")
@@ -35,9 +38,12 @@ def test_cached_native_pi_dynamic_mcp_tools_survive_resume(tmp_path, monkeypatch
         "type": "object", "properties": {"text": {"type": "string"}},
         "required": ["text"], "additionalProperties": False,
     }
-    tool_name = "mcp__contract__echo"
+    server_name = "contract-server"
+    mcp_tool = "echo" if transport == "http" else "fixture_echo"
+    tool_name = f"mcp__contract_server__{mcp_tool}"
     completions = []
     mcp_requests = []
+    stdio_states = []
 
     class Endpoint(BaseHTTPRequestHandler):
         def log_message(self, *args):
@@ -146,9 +152,14 @@ def test_cached_native_pi_dynamic_mcp_tools_survive_resume(tmp_path, monkeypatch
                 )
                 assert version.stdout.strip() == PI_VERSION
             extension = _mcp_extension(session, [{
-                "name": "contract", "type": "http",
+                "name": server_name, "type": "http",
                 "url": f"http://127.0.0.1:{server.server_port}/mcp",
                 "headers": [{"name": "Authorization", "value": "Bearer ${GEER_FIXTURE_HEADER}"}],
+            }] if transport == "http" else [{
+                "name": server_name, "command": sys.executable,
+                "args": [str(Path(__file__).parent / "fixtures" / "stdio_mcp.py"),
+                         str(session / f"{phase}.json")],
+                "env": [{"name": "T3_ACP_MCP_AUTHORIZATION", "value": phase}],
             }])
             assert extension is not None
             assert extension.stat().st_mode & 0o777 == 0o600
@@ -186,6 +197,13 @@ def test_cached_native_pi_dynamic_mcp_tools_survive_resume(tmp_path, monkeypatch
             assert history[-1]["stopReason"] == "stop"
             process.close()
             assert process.process.poll() is not None
+            if transport == "stdio":
+                state = json.loads((session / f"{phase}.json").read_text())
+                assert state["env"]["T3_ACP_MCP_AUTHORIZATION"] == phase
+                assert state["closed"] is True
+                with pytest.raises(ProcessLookupError):
+                    os.kill(state["pid"], 0)
+                stdio_states.append(state)
             saved_bytes = session_path.read_bytes()
 
         assert len(completions) == 4
@@ -196,12 +214,14 @@ def test_cached_native_pi_dynamic_mcp_tools_survive_resume(tmp_path, monkeypatch
             assert tool["parameters"] == schema
             assert continuation["messages"][-1]["role"] == "tool"
             assert f"echo:{phase}" in json.dumps(continuation["messages"][-1]["content"])
-            authenticated = [request for request, header in mcp_requests
-                             if header == f"Bearer {phase}"]
+            authenticated = (
+                [request for request, header in mcp_requests if header == f"Bearer {phase}"]
+                if transport == "http" else stdio_states[index]["requests"]
+            )
             assert [request["method"] for request in authenticated] == [
                 "initialize", "notifications/initialized", "tools/list", "tools/call",
             ]
-            assert authenticated[-1]["params"]["name"] == "echo"
+            assert authenticated[-1]["params"]["name"] == mcp_tool
             assert authenticated[-1]["params"]["arguments"] == {"text": phase}
         assert "echo:before resume" in json.dumps(completions[2]["messages"])
         assert all(header in {"Bearer before resume", "Bearer after resume"}
