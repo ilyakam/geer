@@ -422,6 +422,67 @@ def test_prepare_publication_copies_metadata_and_refreshes_hashes(
     assert model_build.verify_output(recipe, output)["verified"] is True
 
 
+@pytest.mark.parametrize("quant", ["6bit", "4-8bit"])
+def test_sage_templates_prepare_an_inactive_candidate_without_a_release_pin(
+    quant: str,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+):
+    model_build = load_model_build()
+    monkeypatch.setenv("GEER_HOME", str(tmp_path / "home"))
+    recipe = model_build.load_recipe(
+        Path(__file__).parents[1] / "model-recipes" / f"sage-a1.5-35b-{quant}.toml"
+    )
+    assert not Path(recipe.distribution["model_card_dir"]).is_absolute()
+    with pytest.raises(model_build.BuildError, match="pinned distribution revision"):
+        model_build.distribution_revision(recipe)
+
+    source_manifest = model_build.source_manifest_path(recipe)
+    model_build.atomic_json(source_manifest, {"recipe": recipe.identifier, "files": []})
+    output = tmp_path / "candidate"
+    output.mkdir()
+    weights = output / "synthetic.safetensors"
+    weights.write_bytes(b"synthetic weights, no model loaded")
+    weight_hash = model_build.sha256_file(weights)
+    params = {key: recipe.quantization[key] for key in ("bits", "group_size", "mode")}
+    config = {"model_type": recipe.output["expected_architecture"], "quantization": params}
+    predicate = model_build.quantization_predicate(recipe)
+    if predicate is not None:
+        for path in (
+            "language_model.model.layers.0.mlp.switch_mlp.gate_proj",
+            "language_model.model.layers.0.self_attn.q_proj",
+        ):
+            params[path] = predicate(path, None)
+    model_build.atomic_json(output / "config.json", config)
+    model_build.atomic_json(
+        output / "model.safetensors.index.json",
+        {"weight_map": {"synthetic": weights.name}},
+    )
+    files = model_build.hash_files(output)
+    model_build.atomic_json(
+        output / model_build.BUILD_MANIFEST,
+        {
+            "recipe": recipe.identifier,
+            "display_name": recipe.data["display_name"],
+            "source": recipe.source,
+            "quantization": recipe.quantization,
+            "files": files,
+            "bytes": sum(record["bytes"] for record in files),
+        },
+    )
+
+    result = model_build.prepare_publication(recipe, output)
+    assert result["verified"] is True
+    assert result["activation"] == "manual"
+    assert model_build.sha256_file(weights) == weight_hash
+    for name, template in model_build.publication_files(recipe).items():
+        assert (output / name).read_bytes() == template.read_bytes()
+    summary = model_build.publication_summary(recipe, output)
+    assert summary["repo_id"] == f"ilyakam/Geer-Sage-A1.5-35B-A3B-{quant}-MLX"
+    assert summary["visibility"] == "private until verified"
+    assert not (model_build.geer_home() / "models" / "active").exists()
+
+
 def test_activate_snapshot_keeps_previous_symlink(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

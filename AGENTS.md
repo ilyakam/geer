@@ -21,6 +21,9 @@ oMLX engine for inference and Semble over MCP for repository retrieval.
 - `model-distributions/` pins installation revisions. `model-recipes/` and
   `model-cards/` record conversion provenance and licenses.
 
+For Sage-A1.5 conversion, display name promotion, or publication, read
+[the publication runbook](docs/agents-sage-publication.md).
+
 ## Model selection goal
 
 Choose the best practical local model and variant for each Mac's chip and
