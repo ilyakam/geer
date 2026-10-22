@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Experiment history with results, limitations, and conditions for revisiting.
 - Forward images to supported models through Pi
+- Pinned Sage-A1.5 6-bit and mixed 4/8-bit conversion recipes, model cards,
+  attribution evidence, and publication instructions.
 
 ### Changed
 
