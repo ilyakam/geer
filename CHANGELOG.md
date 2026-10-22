@@ -15,9 +15,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Upgrade the pinned Pi harness to official stable 1.4.0.
+- Use T3's native Pi driver for Geer, preserving local background generation
+  and migrating managed model selections without the Grok version warning.
+- Pin fresh T3 installations to stable 0.1.2 and retain compatible Nightly apps.
 
 ### Fixed
 
+- Preserve native Pi thinking preferences across setup and status checks.
 - Accept ACP stdio MCP servers from current T3 Code alongside HTTP servers.
 
 ## [0.3.0] - 2026-10-01

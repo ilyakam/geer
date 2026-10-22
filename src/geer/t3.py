@@ -15,14 +15,16 @@ from .assets import DEFAULT_MODEL_ID, AssetError, Workspace, model_alias, verify
 
 PROVIDER_ID = "piGeer"
 LEGACY_PROVIDER_ID = "claudeGeer"
-# This release has the ACP metadata discovery contract used by Geer's adapter.
-T3_MINIMUM_VERSION = "0.0.43"
-T3_TESTED_VERSION = "0.0.44"
+# Earliest exact native Pi contract inspected for this integration.
+T3_MINIMUM_VERSION = "0.1.1-nightly.20261020.3411"
+T3_TESTED_VERSION = "0.1.1-nightly.20261020.3411"
 T3_BUNDLE_ID = "com.t3tools.t3code"
-T3_TRANSPORT_BUILT_IN_MODELS = ("grok-build",)
+T3_TRANSPORT_BUILT_IN_MODELS = ("grok-build", "default")
 _MODEL_SELECTION_KEYS = (
     "defaultModelSelection", "textGenerationModelSelection", "sourceControlWriterModelSelection",
+    "reviewGuideModelSelection",
 )
+_PI_THINKING_LEVELS = frozenset({"off", "minimal", "low", "medium", "high", "xhigh", "max"})
 RETIRED_GEER_MODELS = (
     "Geer Ornith 1.0 35B-A3B (6-bit MLX)",
     "Geer Ornith 1.0 35B-A3B (4-bit MLX)",
@@ -52,7 +54,10 @@ def t3_settings_path() -> Path:
 
 
 def _t3_app_candidates() -> tuple[Path, ...]:
-    names = ("T3 Code.app", "T3 Code (Alpha).app", "T3 Code (Nightly).app", "T3.app")
+    names = (
+        "T3 Code.app", "T3 Code (Alpha).app", "T3 Code (Beta).app",
+        "T3 Code (Nightly).app", "T3.app",
+    )
     directories = (Path("/Applications"), Path.home() / "Applications")
     candidates = [directory / name for directory in directories for name in names]
     for directory in directories:
@@ -155,7 +160,7 @@ def find_t3() -> T3Application:
         applications.append((app in running, parsed, version or "", app))
     if not applications:
         return T3Application(False)
-    compatible = [application for application in applications if application[1][0] >= minimum[0]]
+    compatible = [application for application in applications if application[1] >= minimum]
     active, _, version, app = max(
         compatible or applications, key=lambda value: (value[0], value[1])
     )
@@ -186,6 +191,28 @@ def _client_settings_path(settings_path: Path) -> Path:
 
 def _provider_cache_path(settings_path: Path, provider: str = PROVIDER_ID) -> Path:
     return settings_path.parent.parent / "caches" / f"{provider}.json"
+
+
+def _native_model_id(model: str, active: str) -> str:
+    if model.startswith("geer/") or model == "default":
+        return model
+    if model in RETIRED_GEER_MODELS or model == "grok-build":
+        return active
+    return f"geer/{model}"
+
+
+def _native_custom_models(models: Any, active: str) -> list[Any]:
+    if not isinstance(models, list):
+        raise AssetError("T3 Geer customModels must contain a JSON array")
+    migrated: list[Any] = []
+    for model in models:
+        if isinstance(model, str):
+            migrated.append(_native_model_id(model, active))
+        elif isinstance(model, dict) and isinstance(model.get("slug"), str):
+            migrated.append({**model, "slug": _native_model_id(model["slug"], active)})
+        else:
+            raise AssetError("T3 Geer customModels must contain model IDs or model objects")
+    return migrated
 
 
 def _migrate_favorites(
@@ -220,6 +247,13 @@ def _migrate_favorites(
                 updated.append({**favorite, "provider": PROVIDER_ID, "model": model_id})
                 model_present = True
             continue
+        if isinstance(favorite, dict) and favorite.get("provider") == PROVIDER_ID:
+            model = favorite.get("model")
+            if isinstance(model, str):
+                native = _native_model_id(model, model_id)
+                if native != model:
+                    favorite = {**favorite, "model": native}
+                    migrated += 1
         updated.append(favorite)
     client_settings["favorites"] = updated
     return migrated
@@ -247,6 +281,29 @@ def _model_selections(settings: dict[str, Any]) -> list[dict[str, Any]]:
     return selections
 
 
+def _validate_native_selection_options(selection: dict[str, Any]) -> None:
+    # Stable 0.1.2's Pi adapter reads only the string-valued thinking option.
+    options = selection.get("options", [])
+    if isinstance(options, dict):
+        # T3 also decodes its legacy object form, trimming IDs and string values.
+        options = [
+            {"id": key.strip(), "value": value.strip() if isinstance(value, str) else value}
+            for key, value in options.items()
+        ]
+    if not isinstance(options, list) or any(
+        not isinstance(option, dict)
+        or not isinstance(option.get("id"), str)
+        or option["id"].strip() != "thinking"
+        or not isinstance(option.get("value"), str)
+        or option["value"].strip() not in _PI_THINKING_LEVELS
+        for option in options
+    ):
+        raise AssetError(
+            "T3 Geer native Pi options must select thinking with "
+            "values off, minimal, low, medium, high, xhigh, or max"
+        )
+
+
 def _legacy_selection(
     selection: dict[str, Any], model_id: str, *, retire_legacy: bool = True
 ) -> bool:
@@ -255,26 +312,37 @@ def _legacy_selection(
         retire_legacy and provider == LEGACY_PROVIDER_ID
         or provider == PROVIDER_ID and (
             "instanceId" not in selection
+            or _native_model_id(str(selection.get("model", "")), model_id)
+            != selection.get("model")
             or selection.get("model") in RETIRED_GEER_MODELS
             and selection.get("model") != model_id
-            or bool(selection.get("options"))
         )
     )
 
 
 def _migrate_selections(
-    settings: dict[str, Any], model_id: str, *, retire_legacy: bool = True
+    settings: dict[str, Any], model_id: str, *, retire_legacy: bool = True,
+    migrate_driver: bool = False,
 ) -> int:
     migrated = 0
     for selection in _model_selections(settings):
-        if not _legacy_selection(selection, model_id, retire_legacy=retire_legacy):
-            continue
         provider = selection.get("instanceId", selection.get("provider"))
+        obsolete_options = provider == PROVIDER_ID and migrate_driver and "options" in selection
+        if provider == PROVIDER_ID and not migrate_driver:
+            _validate_native_selection_options(selection)
+        if not (
+            _legacy_selection(selection, model_id, retire_legacy=retire_legacy)
+            or obsolete_options
+        ):
+            continue
         if provider == LEGACY_PROVIDER_ID or selection.get("model") in RETIRED_GEER_MODELS:
             selection["model"] = model_id
+        else:
+            selection["model"] = _native_model_id(str(selection.get("model", "")), model_id)
         selection["instanceId"] = PROVIDER_ID
         selection.pop("provider", None)
-        selection.pop("options", None)
+        if provider == LEGACY_PROVIDER_ID or migrate_driver:
+            selection.pop("options", None)
         migrated += 1
     return migrated
 
@@ -293,8 +361,15 @@ def _model_preferences(preferences: dict[str, Any], model_id: str) -> list[str]:
         model for model in (*T3_TRANSPORT_BUILT_IN_MODELS, *RETIRED_GEER_MODELS)
         if model != model_id
     ]
-    hidden = list(dict.fromkeys(model for model in (*hidden, *retired) if model != model_id))
-    order = list(dict.fromkeys((model_id, *(model for model in order if model not in retired))))
+    hidden = list(dict.fromkeys(
+        model for model in (
+            *(_native_model_id(model, model_id) for model in hidden if model not in retired),
+            *retired,
+        ) if model != model_id
+    ))
+    order = list(dict.fromkeys((model_id, *(
+        _native_model_id(model, model_id) for model in order if model not in retired
+    ))))
     preferences[PROVIDER_ID] = {**current, "hiddenModels": hidden, "modelOrder": order}
     return hidden
 
@@ -360,7 +435,7 @@ def planned_t3_settings(
 ) -> tuple[dict[Path, dict[str, Any]], dict[str, Any]]:
     manifest = verify_assets(workspace)
     alias = model_alias(manifest)
-    model_id = str(manifest.get("model_id", DEFAULT_MODEL_ID))
+    model_id = f"geer/{manifest.get('model_id', DEFAULT_MODEL_ID)}"
     launcher, launch_args = _launcher(workspace)
     if not launcher.is_file() or not os.access(launcher, os.X_OK):
         raise AssetError(f"T3 launcher is missing or not executable: {launcher}")
@@ -370,7 +445,7 @@ def planned_t3_settings(
     client_path = _client_settings_path(settings_path)
     client_settings = _read_settings(client_path, missing_ok=True)
     if new_settings:
-        # Stable T3 0.0.44 decodes these sparse server settings directly.
+        # Native T3 decodes these sparse server settings directly.
         selection = {"instanceId": PROVIDER_ID, "model": model_id}
         settings["defaultModelSelection"] = dict(selection)
         settings["textGenerationModelSelection"] = dict(selection)
@@ -386,8 +461,6 @@ def planned_t3_settings(
     if not isinstance(preferences, dict):
         raise AssetError("T3 providerModelPreferences must contain a JSON object")
 
-    # T3 does not yet have a native Pi driver. Its existing Grok ACP driver
-    # speaks the same transport as Geer's Pi adapter; no Grok CLI is launched.
     current_provider = providers.get(PROVIDER_ID, {})
     if not isinstance(current_provider, dict):
         raise AssetError("T3 Geer provider must contain a JSON object")
@@ -398,24 +471,24 @@ def planned_t3_settings(
     current_config.pop("enabled", None)
     providers[PROVIDER_ID] = {
         **current_provider,
-        "driver": "grok",
+        "driver": "pi",
         "displayName": "Geer",
         "enabled": True,
         "config": {
             **current_config,
             "binaryPath": str(launcher),
-            "customModels": [],
+            "customModels": _native_custom_models(current_config.get("customModels", []), model_id),
         },
     }
-    legacy_preferences = settings.get("providerModelPreferences")
-    if legacy_preferences is not None and not isinstance(legacy_preferences, dict):
+    synced_preferences = settings.get("providerModelPreferences")
+    if synced_preferences is not None and not isinstance(synced_preferences, dict):
         raise AssetError("T3 providerModelPreferences must contain a JSON object")
-    if isinstance(legacy_preferences, dict):
-        legacy_preferences.pop(PROVIDER_ID, None)
+    if isinstance(synced_preferences, dict):
+        # T3 0.1.x syncs these values through server settings. Null retains the
+        # upstream meaning of "not migrated from a client yet".
+        _model_preferences(synced_preferences, model_id)
         if retire_legacy:
-            legacy_preferences.pop(LEGACY_PROVIDER_ID, None)
-        if not legacy_preferences:
-            del settings["providerModelPreferences"]
+            synced_preferences.pop(LEGACY_PROVIDER_ID, None)
     hidden_models = _model_preferences(preferences, model_id)
     legacy_removed = False
     if retire_legacy:
@@ -424,7 +497,11 @@ def planned_t3_settings(
     favorites_migrated = _migrate_favorites(
         client_settings, model_id, retire_legacy=retire_legacy
     )
-    selections_migrated = _migrate_selections(settings, model_id, retire_legacy=retire_legacy)
+    favorites_migrated += _migrate_favorites(settings, model_id, retire_legacy=retire_legacy)
+    selections_migrated = _migrate_selections(
+        settings, model_id, retire_legacy=retire_legacy,
+        migrate_driver=current_provider.get("driver") != "pi",
+    )
     if new_settings:
         favorites = client_settings.get("favorites")
         if favorites is None:
@@ -440,9 +517,9 @@ def planned_t3_settings(
             favorites.append(favorite)
     result = {
         "provider": PROVIDER_ID,
-        "driver": "grok",
+        "driver": "pi",
         "harness": "Pi",
-        "transport": "ACP through T3's Grok driver",
+        "transport": "native Pi RPC",
         "model": alias,
         "model_id": model_id,
         "launcher": str(launcher),
@@ -513,8 +590,10 @@ def t3_status(workspace: Workspace, settings_path: Path | None = None) -> dict[s
         if not isinstance(providers, dict):
             raise AssetError("T3 providerInstances must contain a JSON object")
         provider = providers.get(PROVIDER_ID)
-        if not isinstance(provider, dict) or provider.get("driver") != "grok":
-            raise AssetError("T3 Geer provider is missing or does not use the Grok ACP driver")
+        if not isinstance(provider, dict) or provider.get("driver") != "pi":
+            raise AssetError(
+                "T3 Geer provider needs the native Pi driver; run geer setup to migrate"
+            )
         config = provider.get("config")
         if (
             not isinstance(config, dict)
@@ -522,6 +601,11 @@ def t3_status(workspace: Workspace, settings_path: Path | None = None) -> dict[s
             or config.get("enabled", True) is not True
         ):
             raise AssetError("T3 Geer provider is disabled or has invalid configuration")
+        custom_models = config.get("customModels", [])
+        if _native_custom_models(custom_models, f"geer/{model_id}") != custom_models:
+            raise AssetError(
+                "T3 Geer custom models need native Pi slugs; run geer setup to migrate"
+            )
         binary_path = config.get("binaryPath")
         if (
             not isinstance(binary_path, str)
@@ -542,38 +626,48 @@ def t3_status(workspace: Workspace, settings_path: Path | None = None) -> dict[s
             or not all(isinstance(model, str) for model in (*hidden, *order))
         ):
             raise AssetError("T3 Geer model preferences contain invalid model lists")
-        if model_id in hidden or model_id not in order:
+        if f"geer/{model_id}" in hidden or f"geer/{model_id}" not in order:
             raise AssetError(
                 f"the active Geer model {model_id} is hidden or missing from T3 modelOrder"
             )
-        legacy_preferences = settings.get("providerModelPreferences", {})
+        legacy_preferences = settings.get("providerModelPreferences")
+        if legacy_preferences is None:
+            legacy_preferences = {}
         if not isinstance(legacy_preferences, dict):
             raise AssetError("T3 server model preferences contain an invalid object")
         if (
             LEGACY_PROVIDER_ID in providers
             or LEGACY_PROVIDER_ID in preferences
-            or any(provider in legacy_preferences for provider in (PROVIDER_ID, LEGACY_PROVIDER_ID))
+            or LEGACY_PROVIDER_ID in legacy_preferences
         ):
             raise AssetError(
                 "T3 still contains legacy Geer provider bindings; run geer setup to migrate"
             )
         favorites = client_settings.get("favorites", [])
-        if not isinstance(favorites, list):
+        synced_favorites = settings.get("favorites")
+        if synced_favorites is None:
+            synced_favorites = []
+        if not isinstance(favorites, list) or not isinstance(synced_favorites, list):
             raise AssetError("T3 favorites must contain a JSON array")
+        selections = _model_selections(settings)
+        for selection in selections:
+            if selection.get("instanceId", selection.get("provider")) == PROVIDER_ID:
+                _validate_native_selection_options(selection)
         if any(
             isinstance(favorite, dict)
             and (
                 favorite.get("provider") == LEGACY_PROVIDER_ID
                 or favorite.get("provider") == PROVIDER_ID
-                and favorite.get("model") in RETIRED_GEER_MODELS
-                and favorite.get("model") != model_id
+                and _native_model_id(str(favorite.get("model", "")), f"geer/{model_id}")
+                != favorite.get("model")
             )
-            for favorite in favorites
+            for favorite in (*favorites, *synced_favorites)
         ) or any(
-            _legacy_selection(selection, model_id) for selection in _model_selections(settings)
+            _legacy_selection(selection, f"geer/{model_id}")
+            for selection in selections
         ):
             raise AssetError(
-                "T3 has obsolete Geer model selections or unsupported options; "
+                "T3 has obsolete Geer model selections; "
                 "run geer setup to migrate"
             )
         result.update(configured=True, ready=True)
@@ -654,9 +748,11 @@ def remove_t3(
                 if provider in value:
                     del value[provider]
                     removed = True
-    favorites = client_settings.get("favorites")
     favorites_removed = 0
-    if favorites is not None:
+    for document in (settings, client_settings):
+        favorites = document.get("favorites")
+        if favorites is None:
+            continue
         if not isinstance(favorites, list):
             raise AssetError("T3 favorites must contain a JSON array")
         retained = [
@@ -666,9 +762,10 @@ def remove_t3(
                 and favorite.get("provider") in {PROVIDER_ID, LEGACY_PROVIDER_ID}
             )
         ]
-        favorites_removed = len(favorites) - len(retained)
-        if favorites_removed:
-            client_settings["favorites"] = retained
+        removed_count = len(favorites) - len(retained)
+        favorites_removed += removed_count
+        if removed_count:
+            document["favorites"] = retained
             removed = True
     selections_removed = 0
     for section in _selection_sections(settings):

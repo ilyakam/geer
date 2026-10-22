@@ -39,24 +39,24 @@ does not replace those terms.
 
 ## T3 Code installation
 
-Geer setup downloads T3 Code 0.0.44 from the
-[official upstream release](https://github.com/pingdotgg/t3code/releases/tag/v0.0.44)
+Geer setup downloads T3 Code 0.1.2 from the
+[official upstream release](https://github.com/pingdotgg/t3code/releases/tag/v0.1.2)
 when no compatible installation is available. The installer includes only the
 integrity and provenance manifest in `packaging/t3-desktop.json`; setup installs
 the official signed app unchanged.
 
-The manifest pins source revision `451afcb22d93f06cb24f9bc16703404564952553`
+The manifest pins source revision `044f07257c9684ae4543bd1e1ebf9c394e9e3830`
 and the Apple Silicon zip
-[`T3-Code-0.0.44-arm64.zip`](https://github.com/pingdotgg/t3code/releases/download/v0.0.44/T3-Code-0.0.44-arm64.zip).
-The zip is 137,613,348 bytes with SHA-256
-`480b5cd8ebcee4f4f43e108d309d91fe7c879931d8aae8a67b71cfd8a07ce0df`.
+[`T3-Code-0.1.2-arm64.zip`](https://github.com/pingdotgg/t3code/releases/download/v0.1.2/T3-Code-0.1.2-arm64.zip).
+The zip is 152,501,697 bytes with SHA-256
+`c99dbde726b168853c4409f32292b7381db2c83c1aca0ebdd1c506065eac990f`.
 The app's identifier is `com.t3tools.t3code`, signed by T3 Tools, Inc. with Apple
 Developer team ID `ARK85ZXQ4Z`.
 
 T3 Code's original code is MIT licensed, copyright T3 Tools Inc. 2026. Its
-[license at the pinned revision](https://github.com/pingdotgg/t3code/blob/451afcb22d93f06cb24f9bc16703404564952553/LICENSE)
-and [source](https://github.com/pingdotgg/t3code/tree/451afcb22d93f06cb24f9bc16703404564952553)
-remain authoritative. The upstream app bundles Electron 44.4.2, Chromium,
+[license at the pinned revision](https://github.com/pingdotgg/t3code/blob/044f07257c9684ae4543bd1e1ebf9c394e9e3830/LICENSE)
+and [source](https://github.com/pingdotgg/t3code/tree/044f07257c9684ae4543bd1e1ebf9c394e9e3830)
+remain authoritative. The upstream app bundles Electron, Chromium,
 Node.js, and other dependencies with their own terms. The app also includes
 license files for `@clerk/electron-passkeys`, its Darwin arm64 native module,
 `@napi-rs/keyring`, and `node-pty`. Geer preserves these upstream licenses,
