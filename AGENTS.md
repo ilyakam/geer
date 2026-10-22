@@ -18,6 +18,32 @@ engine for inference and Semble over MCP for repository retrieval.
 - `model-distributions/` pins installation revisions. `model-recipes/` and
   `model-cards/` record conversion provenance and licenses.
 
+## Model selection goal
+
+Choose the best practical local model and variant for each Mac's chip and
+unified memory. The target covers all M-series configurations with at least
+16 GB, including M1 through M6 and configurations up to 512 GB. Exclude 8 GB
+machines for now. This is a qualification goal; current support still follows
+the implementation and measured evidence.
+
+Budget memory for macOS, T3, Pi, retrieval, inference, and a useful context
+window for sustained agentic, computer-use, and coding tasks. Require at least
+32K total context, including tools, history, images, and generation reserve.
+Loading weights alone does not establish suitability. Preserve image inputs
+in every profile of an image-capable model and verify them through Pi/T3;
+stripping vision to fit a smaller Mac does not meet the model-selection goal.
+
+For model comparison and qualification, follow
+[the evaluation policy](docs/agents-model-evaluation.md). After capability and
+memory checks pass, use 50% reported benchmark quality, 30% verified useful
+context, and 20% measured speed as a provisional ranking. Keep reported
+quality, estimates, and physical-host measurements distinct.
+
+Use oMLX and Ornith as the current comparison baseline. Prefer another model
+or inference server when measured results establish a better fit and the
+compatibility checks in CONTRIBUTING.md prove the migration and recovery path.
+Keep model and runtime selection specific to the hardware configuration.
+
 ## Experiment history
 
 Before model, quantization, runtime, or benchmark work, search
