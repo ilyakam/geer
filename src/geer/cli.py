@@ -419,6 +419,10 @@ def main(arguments: list[str] | None = None) -> int:
                 port=options.port,
             )
         elif options.command == "launch":
+            if remaining[:2] == ["--mode", "rpc"]:
+                from .pi_native import launch_native_pi
+
+                launch_native_pi(workspace, remaining, port=options.port)
             from .pi_acp import run_acp
 
             return run_acp(workspace, remaining)

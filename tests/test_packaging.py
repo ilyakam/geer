@@ -191,7 +191,10 @@ def test_release_verification_rejects_missing_or_stale_dependency_pin(
 
 
 @pytest.mark.parametrize(
-    "binary", ["T3 Code.app", "T3 Code (Alpha).app", "T3-Code-0.0.44-arm64.zip"]
+    "binary", [
+        "T3 Code.app", "T3 Code (Alpha).app", "T3 Code (Beta).app", "T3 Code (Nightly).app",
+        "T3-Code-0.0.44-arm64.zip", "T3-Code-0.1.2-arm64.zip",
+    ]
 )
 def test_release_verification_rejects_bundled_t3(
     release_builder: ModuleType, pinned_payload: Path, binary: str

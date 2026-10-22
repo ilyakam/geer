@@ -8,7 +8,7 @@ Free, private, and open source coding agent that challenges the frontier.
 
 ## At a Glance
 
-Geer = [Ornith 1.5](https://huggingface.co/ilyakam/models) (via [oMLX](https://github.com/jundot/omlx)) + [Pi](https://pi.dev) + [T3 Code](https://t3.codes/) (via Grok ACP)
+Geer = [Ornith 1.5](https://huggingface.co/ilyakam/models) (via [oMLX](https://github.com/jundot/omlx)) + [Pi](https://pi.dev) + [T3 Code](https://t3.codes/) (native Pi driver)
 
 ## Minimum System Requirements
 

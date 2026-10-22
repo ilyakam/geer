@@ -6,13 +6,16 @@ this file for implementation guidance.
 
 ## Code map
 
-Geer connects T3 Code's `grok` ACP driver to Pi RPC. Pi uses the local oMLX
-engine for inference and Semble over MCP for repository retrieval.
+Geer connects T3 Code's native `pi` driver directly to Pi RPC. Pi uses the local
+oMLX engine for inference and Semble over MCP for repository retrieval.
 
 - `src/geer/` is the Python package, managed with `uv`.
 - `src/geer/onboarding.py` owns setup and the terminal interface.
   `src/geer/setup_protocol.py` defines the versioned JSON Lines protocol for
   the SwiftUI client in `packaging/macos/GeerSetup/`.
+- `src/geer/pi_native.py` separates native discovery, tool-free background
+  generation, and Full access chats. `geer launch` dispatches `--mode rpc` to
+  it and retains ACP arguments through `src/geer/pi_acp.py` for recovery.
 - `tools/build_release.py` builds the frozen CLI and macOS installer;
   `tools/build_runtime.py` builds the pinned oMLX runtime.
 - `model-distributions/` pins installation revisions. `model-recipes/` and
@@ -63,11 +66,19 @@ after explicit maintainer review, following the ledger's publication rules.
 - Discover the authenticated loopback endpoint under `~/.geer/state`.
   Keep metadata probes independent of inference startup.
   Keep protocol stdout as JSON Lines and diagnostics on stderr.
-- Advertise the active model's real ID and name through initialize
-  `_meta.modelState`. Require Full access before interactive tools run;
-  keep T3 title/commit-text sessions tool-free.
-- Keep client MCP credentials in private session directories and strip ambient
-  cloud credentials from Pi. Use Pi JSONL history for resumption and complete
+- Advertise the active model through Pi's native model inventory and state,
+  using `geer/<id>` in T3 selections. Retain ACP `_meta.modelState` for legacy
+  clients. Require Full access before interactive tools run; keep native
+  title/commit sessions free of tools, extensions, MCP credentials, and skills.
+- Keep T3's injected native Pi extension and session environment intact for
+  chats. Let T3 and Pi own cancellation, `agent_settled`, and JSONL resumption.
+  Discovery uses `--no-session` without starting inference or MCP.
+- Keep the `piGeer` instance ID through migration and preserve custom provider
+  rows. Grok-backed T3 threads may need explicit Pi resumption after the driver
+  change. Preserve legacy session mappings and JSONL; never rewrite T3's DB.
+- Keep native MCP credentials in the current session environment and legacy
+  ACP credentials in private session directories. Strip ambient cloud
+  credentials from Pi. Use Pi JSONL history for resumption and complete
   turns on `agent_settled` so queued work and compaction finish before replying.
 - Keep Geer's own skills in `~/.geer/skills`. Borrow existing user skill
   directories through Pi's `--skill` paths without copying files or changing

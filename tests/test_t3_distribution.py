@@ -128,10 +128,10 @@ def test_plan_does_not_inspect_download_or_modify(
 
     plan = distribution.t3_distribution_plan(destination)
 
-    assert plan["archive"]["bytes"] == 137_613_348
-    assert plan["installed_bytes"] == 334_315_639
+    assert plan["archive"]["bytes"] == 152_501_697
+    assert plan["installed_bytes"] == 402_260_905
     assert plan["destination"] == str(destination)
-    assert plan["executable"] == str(destination / "Contents/MacOS/T3 Code (Alpha)")
+    assert plan["executable"] == str(destination / "Contents/MacOS/T3 Code (Beta)")
     assert not destination.parent.exists()
 
 
