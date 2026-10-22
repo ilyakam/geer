@@ -24,6 +24,15 @@ oMLX engine for inference and Semble over MCP for repository retrieval.
 For Sage-A1.5 conversion, display name promotion, or publication, read
 [the publication runbook](docs/agents-sage-publication.md).
 
+## Maintainer PKG signing
+
+For maintainer releases on the release Mac, reuse the matching Developer ID
+Application and Developer ID Installer identities already available there.
+Pass them to `tools/build_release.py` with `--application-sign` and
+`--installer-sign`, and reuse `--notary-profile geer-notary`.
+Confirm the existing Keychain profile with the read-only command
+`xcrun notarytool history --keychain-profile geer-notary --output-format json`.
+
 ## Model selection goal
 
 Choose the best practical local model and variant for each Mac's chip and
