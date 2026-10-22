@@ -42,6 +42,13 @@ def model_alias(manifest: dict[str, Any]) -> str:
     return DEFAULT_MODEL_ALIAS
 
 
+def _input_modalities(config: dict[str, Any]) -> list[str]:
+    # The selected Qwen-family VLM declares its image tower in vision_config.
+    # This describes model inputs, not measured image-serving qualification.
+    vision = config.get("vision_config")
+    return ["text", "image"] if isinstance(vision, dict) and vision else ["text"]
+
+
 @dataclass(frozen=True)
 class Workspace:
     root: Path
@@ -256,6 +263,7 @@ def initialize_assets(
         "source_version": _read_optional_text(source / "version.txt"),
         "architecture": config.get("architectures"),
         "model_type": config.get("model_type"),
+        "input_modalities": _input_modalities(config),
         "context_length": _context_length(config),
         "quantization": {
             key: value
@@ -309,6 +317,9 @@ def verify_assets(
             raise AssetError(f"asset size changed: {resolved}")
         if verify_hashes and _sha256(resolved) != entry.get("sha256"):
             raise AssetError(f"asset hash changed: {resolved}")
+    # Derive capabilities from the verified model links, including installations
+    # whose saved manifest predates input_modalities. Probes never rewrite state.
+    manifest["input_modalities"] = _input_modalities(_load_json(link_root / "config.json"))
     return manifest
 
 
