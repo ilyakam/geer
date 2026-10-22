@@ -1128,7 +1128,7 @@ def ensure_pi_config(
             "id": model_id,
             "name": model_alias(manifest),
             "reasoning": True,
-            "input": ["text"],
+            "input": manifest.get("input_modalities", ["text"]),
             "contextWindow": profile.max_context_window,
             "maxTokens": min(16_384, profile.max_context_window // 4),
             "cost": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0},

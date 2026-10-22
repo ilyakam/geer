@@ -97,7 +97,28 @@ def test_initialize_assets_links_only_selected_model_files(tmp_path: Path) -> No
     assert manifest["indexed_weight_bytes"] == 7
     assert manifest["build"]["recipe"] == "test-6bit"
     assert manifest["files"][0]["sha256"]
+    assert manifest["input_modalities"] == ["text"]
     assert verify_assets(workspace)["model_id"] == "local"
+
+
+@pytest.mark.parametrize("vision", [None, {}, {"model_type": "qwen3_5_moe"}])
+def test_model_inputs_follow_selected_config_and_legacy_probes_do_not_rewrite_state(
+    tmp_path: Path, vision: dict | None,
+) -> None:
+    workspace = Workspace(tmp_path)
+    source = make_model(tmp_path / "source")
+    path = source / "config.json"
+    config = json.loads(path.read_text())
+    config["vision_config"] = vision
+    path.write_text(json.dumps(config))
+    expected = ["text", "image"] if vision else ["text"]
+    manifest = initialize_assets(workspace, source, "local")
+    assert manifest["input_modalities"] == expected
+    manifest.pop("input_modalities")
+    workspace.manifest.write_text(json.dumps(manifest))
+    before = workspace.manifest.read_bytes()
+    assert verify_assets(workspace)["input_modalities"] == expected
+    assert workspace.manifest.read_bytes() == before
 
 
 def test_initialize_assets_retargets_managed_symlinks_for_a_new_model(

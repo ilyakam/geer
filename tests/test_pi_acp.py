@@ -7,6 +7,7 @@ import signal
 import sys
 import threading
 import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -18,8 +19,9 @@ from geer.pi_acp import (
     AcpError,
     PiProcess,
     PiRpcTimeout,
+    _image_extension,
     _mcp_extension,
-    _prompt_text,
+    _prompt_content,
     _t3_skill_extension,
     inspect_skills,
     model_state,
@@ -32,6 +34,15 @@ MODEL = {
     "id": "geer-local",
     "name": "Geer Ornith (6-bit MLX)",
     "contextWindow": 65_536,
+    "input": ["text"],
+}
+IMAGE = {
+    "type": "image",
+    "mimeType": "image/png",
+    "data": (
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlE"
+        "QVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg=="
+    ),
 }
 
 
@@ -76,6 +87,7 @@ class FakePi:
         self.calls = []
         self.prompt_received = threading.Event()
         self.closed = False
+        self.model = MODEL
         self.history = Path(argv[argv.index("--session-dir") + 1])
         self.path = self.history / "pi-session.jsonl"
         if "--session" in argv:
@@ -105,14 +117,14 @@ class FakePi:
             dispatched.set()
         if command == "get_state":
             return {
-                "model": MODEL,
+                "model": self.model,
                 "sessionFile": str(self.path),
                 "sessionId": "native-pi-id",
                 "isStreaming": False,
                 "isCompacting": False,
             }
         if command == "get_available_models":
-            return {"models": [MODEL, {"provider": "unrelated", "id": "remote"}]}
+            return {"models": [self.model, {"provider": "unrelated", "id": "remote"}]}
         if command == "get_commands":
             return {"commands": [{"name": "skill:example", "description": "Example skill"}]}
         if command == "get_messages":
@@ -123,7 +135,12 @@ class FakePi:
                 "contextUsage": {"tokens": 34, "contextWindow": 65_536},
             }
         if command == "prompt":
-            self.append_message({"role": "user", "content": fields["message"]})
+            content = fields["message"]
+            if fields.get("images"):
+                content = [{"type": "text", "text": content}, *fields["images"]]
+            user = {"role": "user", "content": content, "timestamp": time.time_ns() // 1_000_000}
+            self.emit({"type": "message_start", "message": user})
+            self.emit({"type": "message_end", "message": user})
             self.prompt_received.set()
             return {"disposition": "started"}
         if command == "abort":
@@ -152,10 +169,12 @@ def rig(tmp_path, monkeypatch):
     workspace = Workspace(tmp_path / "geer")
     cwd = tmp_path / "repo"
     cwd.mkdir()
+    model = {**MODEL, "input": ["text"]}
     manifest = {
         "model_id": "geer-local",
         "context_length": 262_144,
         "build": {"display_name": MODEL["name"]},
+        "input_modalities": model["input"],
     }
     monkeypatch.setattr("geer.pi_acp.verify_assets", lambda _: manifest)
     monkeypatch.setattr(
@@ -173,15 +192,16 @@ def rig(tmp_path, monkeypatch):
 
     def factory(*args):
         process = FakePi(*args)
+        process.model = model
         processes.append(process)
         return process
 
     bridges = []
 
-    def make_bridge(full_access=True, name="t3-code"):
+    def make_bridge(full_access=True, name="t3-code", process_factory=factory):
         output = io.BytesIO()
         bridge = AcpBridge(
-            workspace, full_access=full_access, output=output, process_factory=factory
+            workspace, full_access=full_access, output=output, process_factory=process_factory
         )
         bridge.handle(
             {
@@ -203,6 +223,8 @@ def rig(tmp_path, monkeypatch):
         processes=processes,
         make_bridge=make_bridge,
         preparations=preparations,
+        manifest=manifest,
+        model=model,
     )
     for bridge in bridges:
         bridge.close()
@@ -264,7 +286,7 @@ def test_title_generation_disables_every_tool_without_trusting_bare_chats(rig):
     bridge = rig.make_bridge(full_access=False, name="t3-code-git-text")
     session_id = open_session(rig, bridge)
     assert rig.preparations[0]["tools"] is False
-    assert "--extension" not in rig.preparations[0]["args"]
+    assert not (bridge.sessions[session_id].directory / "client-mcp.mjs").exists()
     assert result(bridge, 2)["result"]["modes"]["currentModeId"] == "text-only"
     call(bridge, 3, "session/set_mode", sessionId=session_id, modeId="full-access")
     assert "error" in result(bridge, 3)
@@ -280,10 +302,24 @@ def test_t3_skill_input_extension_is_private_and_only_loaded_for_interactive_t3(
         assert extension.is_file()
         assert extension.stat().st_mode & 0o777 == 0o600
         arguments = rig.preparations[0]["args"]
-        assert arguments[arguments.index("--extension") + 1] == str(extension)
+        assert str(extension) in arguments
     else:
         assert not extension.exists()
-        assert "--extension" not in rig.preparations[0]["args"]
+
+
+def test_image_preflight_extension_is_private_and_loaded_before_skill_handlers(rig):
+    bridge = rig.make_bridge()
+    session_id = open_session(rig, bridge)
+    directory = bridge.sessions[session_id].directory
+    extension = directory / "images.mjs"
+    assert extension.is_file()
+    assert extension.stat().st_mode & 0o777 == 0o600
+    arguments = rig.preparations[0]["args"]
+    assert arguments.index(str(extension)) < arguments.index(str(directory / "t3-skills.mjs"))
+    extension.unlink()
+    extension.symlink_to(directory / "unexpected-target")
+    with pytest.raises(AcpError, match="symlink"):
+        _image_extension(directory)
 
 
 def test_t3_skill_read_error_fails_handled_turn_without_waiting_for_inference(rig, monkeypatch):
@@ -468,7 +504,7 @@ def test_corrects_t3_generated_runtime_harness_without_changing_user_content(rig
 def test_preserves_runtime_info_outside_t3_generated_final_block(client_name, texts):
     blocks = [{"type": "text", "text": text} for text in texts]
 
-    assert _prompt_text(blocks, client_name=client_name) == "\n\n".join(texts)
+    assert _prompt_content(blocks, client_name=client_name) == ("\n\n".join(texts), [])
 
 
 def test_streams_text_thinking_tools_and_waits_for_pi_settled(rig):
@@ -630,7 +666,12 @@ def test_cancel_stays_responsive_and_clears_queue_before_abort(rig):
     assert commands.index("clear_queue") < commands.index("abort")
 
 
-def test_cancel_during_prompt_preflight_waits_for_the_acknowledged_run_to_stop(rig, monkeypatch):
+@pytest.mark.parametrize("with_image", [False, True])
+def test_cancel_during_prompt_preflight_waits_for_the_acknowledged_run_to_stop(
+    rig, monkeypatch, with_image,
+):
+    if with_image:
+        rig.model["input"].append("image")
     bridge = rig.make_bridge()
     session_id = open_session(rig, bridge)
     process = rig.processes[0]
@@ -651,7 +692,10 @@ def test_cancel_during_prompt_preflight_waits_for_the_acknowledged_run_to_stop(r
                 fields["dispatched"].set()
                 preflight.set()
                 assert acknowledge.wait(3)
-                process.append_message({"role": "user", "content": fields["message"]})
+                content = fields["message"]
+                if fields.get("images"):
+                    content = [{"type": "text", "text": content}, *fields["images"]]
+                process.append_message({"role": "user", "content": content})
                 return {"disposition": "started"}
         if command == "abort":
             abort_count += 1
@@ -664,8 +708,10 @@ def test_cancel_during_prompt_preflight_waits_for_the_acknowledged_run_to_stop(r
         return original_request(command, **fields)
 
     monkeypatch.setattr(process, "request", request)
-    call(bridge, 3, "session/prompt", sessionId=session_id,
-         prompt=[{"type": "text", "text": "Delayed first turn"}])
+    prompt = [{"type": "text", "text": "Delayed first turn"}]
+    if with_image:
+        prompt.append(IMAGE)
+    call(bridge, 3, "session/prompt", sessionId=session_id, prompt=prompt)
     assert preflight.wait(1)
     call(bridge, None, "session/cancel", sessionId=session_id)
     assert abort_count == 1
@@ -691,10 +737,15 @@ def test_cancel_during_prompt_preflight_waits_for_the_acknowledged_run_to_stop(r
     assert abort_count == 2
 
 
-def test_cached_native_pi_cancel_stops_prompt_after_delayed_preflight(rig, tmp_path, monkeypatch):
+@pytest.mark.parametrize("with_image", [False, True])
+def test_cached_native_pi_cancel_stops_prompt_after_delayed_preflight(
+    rig, tmp_path, monkeypatch, with_image,
+):
     binary = Path(__file__).resolve().parents[1] / "build/pi-runtime/pi/pi"
     if not binary.is_file():
         pytest.skip("Pinned native Pi runtime is not staged")
+    if with_image:
+        rig.model["input"].append("image")
     agent = tmp_path / "native-agent"
     agent.mkdir(mode=0o700)
     for name, value in [
@@ -703,7 +754,8 @@ def test_cached_native_pi_cancel_stops_prompt_after_delayed_preflight(rig, tmp_p
             "api": "openai-completions", "baseUrl": "http://127.0.0.1:1/v1",
             "apiKey": "synthetic-unused", "models": [{
                 "id": MODEL["id"], "name": MODEL["name"], "reasoning": False,
-                "input": ["text"], "contextWindow": MODEL["contextWindow"], "maxTokens": 4096,
+                "input": rig.model["input"],
+                "contextWindow": MODEL["contextWindow"], "maxTokens": 4096,
                 "cost": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0},
             }],
         }}}),
@@ -778,7 +830,7 @@ def test_cached_native_pi_cancel_stops_prompt_after_delayed_preflight(rig, tmp_p
     bridge.process_factory = factory
     session_id = open_session(rig, bridge)
     call(bridge, 3, "session/prompt", sessionId=session_id,
-         prompt=[{"type": "text", "text": "Delayed first turn"}])
+         prompt=[{"type": "text", "text": "Delayed first turn"}, *([IMAGE] if with_image else [])])
     assert preflight.wait(3)
     state = bridge.sessions[session_id].rpc("get_state")
     assert not state["isStreaming"] and not state["isCompacting"]
@@ -1209,7 +1261,7 @@ def test_mcp_client_token_is_private_session_data_and_semble_is_preserved(rig):
     assert not extension.exists()
 
 
-def test_images_and_uninstalled_model_fail_without_sending_to_pi(rig):
+def test_text_only_model_rejects_images_and_uninstalled_model_without_sending_to_pi(rig):
     bridge = rig.make_bridge()
     session_id = open_session(rig, bridge)
     call(
@@ -1218,13 +1270,342 @@ def test_images_and_uninstalled_model_fail_without_sending_to_pi(rig):
         "session/prompt",
         sessionId=session_id,
         prompt=[
-            {"type": "image", "mimeType": "image/png", "data": "example"},
+            IMAGE,
         ],
     )
-    assert "accepts text" in result(bridge, 3)["error"]["message"]
+    assert "does not support image input" in result(bridge, 3)["error"]["message"]
+    assert result(bridge, 1)["result"]["agentCapabilities"]["promptCapabilities"]["image"] is False
     call(bridge, 4, "session/set_model", sessionId=session_id, modelId="unrelated-cloud-model")
     assert "Only the installed" in result(bridge, 4)["error"]["message"]
     assert not any(command in {"prompt", "set_model"} for command, _ in rig.processes[0].calls)
+
+
+@pytest.mark.parametrize("image_only", [False, True])
+def test_native_image_prompt_preserves_text_and_image_bytes(rig, image_only):
+    rig.model["input"].append("image")
+    bridge = rig.make_bridge()
+    assert result(bridge, 1)["result"]["agentCapabilities"]["promptCapabilities"]["image"] is True
+    assert rig.preparations == []
+    session_id = open_session(rig, bridge)
+    process = rig.processes[0]
+    images = [IMAGE, {**IMAGE, "uri": "file:///never-read.png", "_meta": {"example": True}}]
+    prompt = images if image_only else [
+        {"type": "text", "text": "Compare these screenshots"},
+        images[0],
+        {"type": "resource", "resource": {"uri": "file:///notes", "text": "Context"}},
+        images[1],
+        {"type": "text", "text": t3_runtime_info()},
+    ]
+    before = json.dumps(prompt)
+    call(bridge, 3, "session/prompt", sessionId=session_id, prompt=prompt)
+    assert process.prompt_received.wait(1)
+    fields = next(fields for command, fields in process.calls if command == "prompt")
+    assert fields == {
+        "message": "" if image_only else (
+            "Compare these screenshots\n\nfile:///notes\nContext\n\n"
+            + t3_runtime_info(harness="Pi")
+        ),
+        "images": [IMAGE, IMAGE],
+    }
+    assert json.dumps(prompt) == before
+    assert result(bridge, 3) is None
+    process.emit({"type": "agent_settled"})
+    assert wait_result(bridge, 3)["result"]["stopReason"] == "end_turn"
+
+
+@pytest.mark.parametrize("image, error", [
+    ({**IMAGE, "data": "not base64!"}, "valid base64"),
+    ({**IMAGE, "data": "aGVsbG8"}, "valid base64"),
+    ({**IMAGE, "data": "non-ascii 🦆"}, "valid base64"),
+    ({**IMAGE, "data": ""}, "inline base64"),
+    ({**IMAGE, "data": None}, "inline base64"),
+    ({"type": "image", "mimeType": "image/png", "uri": "https://example.com/a.png"}, "URI-only"),
+    ({**IMAGE, "mimeType": "image/svg+xml"}, "MIME types"),
+    ({**IMAGE, "mimeType": []}, "MIME types"),
+    ({"type": "audio", "mimeType": "audio/wav", "data": "YQ=="}, "Unsupported prompt content"),
+])
+def test_invalid_image_prompt_fails_before_pi_and_next_text_turn_works(rig, image, error):
+    rig.model["input"].append("image")
+    bridge = rig.make_bridge()
+    session_id = open_session(rig, bridge)
+    process = rig.processes[0]
+    call(bridge, 3, "session/prompt", sessionId=session_id,
+         prompt=[{"type": "text", "text": "Do not drop the attachment"}, image])
+    failure = result(bridge, 3)["error"]
+    assert failure["code"] == -32602
+    assert error in failure["message"]
+    assert not any(command == "prompt" for command, _ in process.calls)
+    call(bridge, 4, "session/prompt", sessionId=session_id,
+         prompt=[{"type": "text", "text": "Text still works"}])
+    assert process.prompt_received.wait(1)
+    assert next(fields for command, fields in process.calls if command == "prompt") == {
+        "message": "Text still works",
+    }
+    process.emit({"type": "agent_settled"})
+    assert wait_result(bridge, 4)["result"]["stopReason"] == "end_turn"
+
+
+@pytest.mark.parametrize("command", ["/compact", "/example-command", "/skill:example"])
+def test_image_commands_are_rejected_before_pi_can_execute_them(rig, command):
+    rig.model["input"].append("image")
+    bridge = rig.make_bridge()
+    session_id = open_session(rig, bridge)
+    call(bridge, 3, "session/prompt", sessionId=session_id,
+         prompt=[{"type": "text", "text": command}, IMAGE])
+    assert "cannot be attached to Pi commands" in result(bridge, 3)["error"]["message"]
+    assert not any(command in {"prompt", "compact"} for command, _ in rig.processes[0].calls)
+
+
+def test_image_turn_can_cancel_resume_and_continue_without_reusing_attachments(rig):
+    rig.model["input"].append("image")
+    first = rig.make_bridge()
+    session_id = open_session(rig, first)
+    process = rig.processes[0]
+    call(first, 3, "session/prompt", sessionId=session_id,
+         prompt=[{"type": "text", "text": "Describe the screenshot"}, IMAGE])
+    assert process.prompt_received.wait(1)
+    call(first, 4, "session/cancel", sessionId=session_id)
+    assert wait_result(first, 3)["result"]["stopReason"] == "cancelled"
+    commands = [command for command, _ in process.calls]
+    assert commands.index("clear_queue") < commands.index("abort")
+    before = process.path.read_bytes()
+    first.close()
+    second = rig.make_bridge()
+    call(second, 2, "session/load", sessionId=session_id, cwd=str(rig.cwd), mcpServers=[])
+    assert "error" not in result(second, 2)
+    resumed = rig.processes[1]
+    assert resumed.path == process.path and resumed.path.read_bytes() == before
+    content = [
+        item["params"]["update"]["content"] for item in records(second)
+        if item.get("method") == "session/update"
+        and item["params"]["update"]["sessionUpdate"] == "user_message_chunk"
+    ]
+    assert content == [{"type": "text", "text": "Describe the screenshot"}, IMAGE]
+    assert resumed.messages[0]["content"][-1] == IMAGE
+    call(second, 3, "session/prompt", sessionId=session_id,
+         prompt=[{"type": "text", "text": "Continue from that image"}])
+    assert resumed.prompt_received.wait(1)
+    assert next(fields for command, fields in resumed.calls if command == "prompt") == {
+        "message": "Continue from that image",
+    }
+    resumed.emit({"type": "agent_settled"})
+    assert wait_result(second, 3)["result"]["stopReason"] == "end_turn"
+
+
+def test_pi_image_failure_is_reported_without_claiming_an_interpretation(rig):
+    rig.model["input"].append("image")
+    bridge = rig.make_bridge()
+    session_id = open_session(rig, bridge)
+    process = rig.processes[0]
+    call(bridge, 3, "session/prompt", sessionId=session_id, prompt=[IMAGE])
+    assert process.prompt_received.wait(1)
+    process.emit({"type": "message_end", "message": {
+        "role": "assistant", "content": [], "stopReason": "error",
+        "errorMessage": "Image decoder rejected the input",
+    }})
+    process.emit({"type": "agent_settled"})
+    assert wait_result(bridge, 3)["error"]["message"] == "Image decoder rejected the input"
+
+
+def test_native_image_preflight_rejection_returns_error_and_leaves_history_unchanged(
+    rig, monkeypatch,
+):
+    rig.model["input"].append("image")
+    bridge = rig.make_bridge()
+    session_id = open_session(rig, bridge)
+    process = rig.processes[0]
+    original_request = process.request
+    failure = "Geer image input failed: An attachment could not be decoded or resized"
+    before = process.path.read_bytes()
+
+    def request(command, **fields):
+        if command == "prompt":
+            fields["dispatched"].set()
+            process.emit({
+                "type": "extension_ui_request", "method": "notify",
+                "notifyType": "error", "message": failure,
+            })
+            return {"disposition": "handled"}
+        return original_request(command, **fields)
+
+    monkeypatch.setattr(process, "request", request)
+    call(bridge, 3, "session/prompt", sessionId=session_id, prompt=[IMAGE])
+    assert wait_result(bridge, 3)["error"]["message"] == failure
+    assert not process.messages
+    assert process.path.read_bytes() == before
+    assert not any(
+        item.get("method") == "session/update"
+        and item["params"]["update"]["sessionUpdate"] in {
+            "agent_message_chunk", "agent_thought_chunk", "tool_call", "tool_call_update",
+        }
+        for item in records(bridge)
+    )
+
+
+@pytest.mark.parametrize("image_case", ["valid", "malformed", "mixed"])
+@pytest.mark.parametrize("auto_resize", [False, True])
+def test_cached_native_pi_image_preflight_and_round_trip(
+    rig, tmp_path, monkeypatch, image_case, auto_resize,
+):
+    binary = Path(__file__).resolve().parents[1] / "build/pi-runtime/pi/pi"
+    if not binary.is_file():
+        pytest.skip("cached pinned Pi runtime is unavailable")
+    # A synthetic HTTP response exercises the real serializer without inference.
+    requests = []
+    tool_marker = rig.cwd / "synthetic-image-tool.txt"
+
+    class Endpoint(BaseHTTPRequestHandler):
+        def log_message(self, *args):
+            pass
+
+        def do_POST(self):
+            requests.append(json.loads(self.rfile.read(int(self.headers["Content-Length"]))))
+            messages = requests[-1]["messages"]
+            user = next(item for item in reversed(messages) if item["role"] == "user")
+            text = user["content"] if isinstance(user["content"], str) else "".join(
+                item.get("text", "") for item in user["content"]
+            )
+            invoke_tool = "Inspect attachment" in text and messages[-1]["role"] != "tool"
+            delta = {"role": "assistant", "content": "Synthetic transport response"}
+            if invoke_tool:
+                delta = {"role": "assistant", "tool_calls": [{
+                    "index": 0, "id": "fixture-write", "type": "function", "function": {
+                        "name": "write", "arguments": json.dumps({
+                            "path": str(tool_marker), "content": "Synthetic tool action",
+                        }),
+                    },
+                }]}
+            chunk = {
+                "id": "fixture", "object": "chat.completion.chunk", "created": 0,
+                "model": MODEL["id"], "choices": [{"index": 0, "delta": delta,
+                    "finish_reason": "tool_calls" if invoke_tool else "stop"}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            }
+            body = f"data: {json.dumps(chunk)}\n\ndata: [DONE]\n\n".encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Endpoint)
+    serving = threading.Thread(target=server.serve_forever, daemon=True)
+    serving.start()
+    rig.model["input"].append("image")
+    agent = tmp_path / "native-agent"
+    agent.mkdir(mode=0o700)
+    (agent / "settings.json").write_text(json.dumps({
+        "enableInstallTelemetry": False, "enableAnalytics": False,
+        "images": {"autoResize": auto_resize},
+    }))
+    (agent / "models.json").write_text(json.dumps({"providers": {"geer": {
+        "api": "openai-completions", "baseUrl": f"http://127.0.0.1:{server.server_port}/v1",
+        "apiKey": "synthetic-unused", "models": [{
+            **rig.model, "reasoning": False, "maxTokens": 4096,
+            "cost": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0},
+        }],
+    }}}))
+
+    def prepare(workspace, arguments, **kwargs):
+        return [
+            str(binary), "--offline", "--no-approve", "--no-context-files", "--tools", "write",
+            "--no-extensions", "--no-skills", "--no-prompt-templates", "--no-themes",
+            "--provider", "geer", "--model", MODEL["id"], *arguments,
+        ], {
+            "PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": str(tmp_path),
+            "PI_CODING_AGENT_DIR": str(agent), "PI_OFFLINE": "1",
+            "PI_SKIP_VERSION_CHECK": "1", "PI_TELEMETRY": "0",
+        }
+
+    monkeypatch.setattr("geer.runtime.prepare_pi", prepare)
+    first = second = None
+    try:
+        first = rig.make_bridge(name="offline-fixture", process_factory=PiProcess)
+        session_id = open_session(rig, first)
+        session = first.sessions[session_id]
+        session_path = Path(session.rpc("get_state")["sessionFile"])
+        before = session_path.read_bytes()
+        before_messages = session.rpc("get_messages")["messages"]
+        malformed = {**IMAGE, "data": "YQ=="}
+        images = [IMAGE] if image_case == "valid" else (
+            [malformed] if image_case == "malformed" else [IMAGE, malformed]
+        )
+        call(first, 3, "session/prompt", sessionId=session_id,
+             prompt=[{"type": "text", "text": "Inspect attachment"}, *images])
+        reply = wait_result(first, 3)
+        if image_case != "valid":
+            assert "could not be decoded or resized" in reply["error"]["message"]
+            assert requests == []
+            assert not tool_marker.exists()
+            assert session.rpc("get_messages")["messages"] == before_messages
+            assert session_path.read_bytes() == before
+            assert not any(
+                item.get("method") == "session/update"
+                and item["params"]["update"]["sessionUpdate"] in {
+                    "agent_message_chunk", "agent_thought_chunk", "tool_call", "tool_call_update",
+                }
+                for item in records(first)
+            )
+            # A later turn in the same process must not inherit hidden responses.
+            call(first, 4, "session/prompt", sessionId=session_id,
+                 prompt=[{"type": "text", "text": "A clean text turn"}])
+            assert wait_result(first, 4)["result"]["stopReason"] == "end_turn"
+            history = session.rpc("get_messages")["messages"]
+            assert [item["role"] for item in history if item["role"] != "system"] == [
+                "user", "assistant",
+            ]
+            assert not tool_marker.exists()
+            assert len(requests) == 1
+            before_resume = session_path.read_bytes()
+            first.close()
+            second = rig.make_bridge(name="offline-fixture", process_factory=PiProcess)
+            call(second, 2, "session/load", sessionId=session_id, cwd=str(rig.cwd), mcpServers=[])
+            assert "error" not in result(second, 2)
+            assert second.sessions[session_id].rpc("get_messages")["messages"] == history
+            assert session_path.read_bytes() == before_resume
+            call(second, 3, "session/prompt", sessionId=session_id,
+                 prompt=[{"type": "text", "text": "Continue after resume"}])
+            assert wait_result(second, 3)["result"]["stopReason"] == "end_turn"
+            assert len(requests) == 2
+            assert not tool_marker.exists()
+            assert "Inspect attachment" not in json.dumps(requests)
+            assert "Image omitted" not in json.dumps(requests)
+            assert "fixture-write" not in json.dumps(requests)
+            return
+        assert "result" in reply, reply
+        assert reply["result"]["stopReason"] == "end_turn"
+        assert tool_marker.read_text() == "Synthetic tool action"
+        assert len(requests) == 2
+        assert requests[0]["tools"][0]["function"]["name"] == "write"
+        user = next(item for item in requests[0]["messages"] if item["role"] == "user")
+        assert user["content"][-1] == {
+            "type": "image_url", "image_url": {"url": f"data:image/png;base64,{IMAGE['data']}"},
+        }
+        history = first.sessions[session_id].rpc("get_messages")["messages"]
+        assert next(item for item in history if item["role"] == "user")["content"][-1] == IMAGE
+        first.close()
+        second = rig.make_bridge(name="offline-fixture", process_factory=PiProcess)
+        call(second, 2, "session/load", sessionId=session_id, cwd=str(rig.cwd), mcpServers=[])
+        assert "error" not in result(second, 2)
+        assert any(
+            item.get("method") == "session/update"
+            and item["params"]["update"].get("content") == IMAGE
+            for item in records(second)
+        )
+        call(second, 3, "session/prompt", sessionId=session_id,
+             prompt=[{"type": "text", "text": "Continue"}])
+        assert wait_result(second, 3)["result"]["stopReason"] == "end_turn"
+        assert len(requests) == 3
+        replayed_user = next(item for item in requests[-1]["messages"] if item["role"] == "user")
+        assert replayed_user == user
+    finally:
+        for bridge in (first, second):
+            if bridge is not None:
+                bridge.close()
+        server.shutdown()
+        server.server_close()
+        serving.join(timeout=3)
+        assert not serving.is_alive()
 
 
 @pytest.mark.parametrize("metadata", [1, "invalid", ["invalid"], None])
