@@ -1237,7 +1237,91 @@ def test_session_id_and_saved_file_cannot_escape_private_history(rig, tmp_path):
     assert outside.read_text() == "preserve"
 
 
-def test_mcp_client_token_is_private_session_data_and_semble_is_preserved(rig):
+def mcp_definitions(path):
+    literal = path.read_text().split("  const servers = JSON.parse(", 1)[1].split(");\n", 1)[0]
+    return json.loads(json.loads(literal))
+
+
+def stdio_client(token="synthetic-private-token"):
+    return {
+        "name": "t3-code",
+        "command": "/Applications/Synthetic T3.app/Contents/MacOS/T3 Code",
+        "args": ["/synthetic/app.js", "acp-mcp-bridge", "", "quotes '\"\\\n", "$(unused)"],
+        "env": [
+            {"name": "ELECTRON_RUN_AS_NODE", "value": "1"},
+            {"name": "T3_ACP_MCP_ENDPOINT", "value": "http://127.0.0.1:1234"},
+            {"name": "T3_ACP_MCP_AUTHORIZATION", "value": token},
+        ],
+    }
+
+
+@pytest.mark.parametrize("explicit_type", [False, True])
+def test_mcp_stdio_forwards_command_args_and_environment_exactly(tmp_path, explicit_type):
+    client = stdio_client()
+    if explicit_type:
+        client["type"] = "stdio"
+    # Both keys and values are data, even when they have JS special meaning.
+    client["name"] = "__proto__"
+    client["env"].append({"name": "__proto__", "value": "quotes '\"\\\n"})
+    path = _mcp_extension(tmp_path, [client])
+    assert mcp_definitions(path) == {"__proto__": {
+        "command": client["command"], "args": client["args"],
+        "env": {item["name"]: item["value"] for item in client["env"]},
+        "exposure": "direct",
+    }}
+
+
+def test_mcp_mixes_http_and_stdio_without_changing_http_headers(tmp_path):
+    http = {
+        "type": "http", "name": "remote", "url": "https://example.invalid/mcp",
+        "headers": [{"name": "Authorization", "value": "Bearer synthetic"}],
+    }
+    path = _mcp_extension(tmp_path, [http, stdio_client()])
+    definitions = mcp_definitions(path)
+    assert definitions["remote"] == {
+        "url": http["url"], "headers": {"Authorization": "Bearer synthetic"},
+        "exposure": "direct",
+    }
+    assert definitions["t3-code"]["command"] == stdio_client()["command"]
+
+
+@pytest.mark.parametrize("invalid", [
+    {"type": value} for value in (None, [], {}, 1, True, "sse", "unknown")
+] + [
+    {"command": value} for value in (None, [], {}, 1, "", "  ", "bad\0command")
+] + [
+    {"args": value} for value in (None, "one string", {}, [1], [None], ["bad\0arg"])
+] + [
+    {"env": value} for value in (
+        None, {}, ["KEY=value"], [None], [{"name": "KEY"}],
+        [{"name": 1, "value": "value"}], [{"name": "KEY", "value": 1}],
+        [{"name": "", "value": "value"}], [{"name": "K=V", "value": "value"}],
+        [{"name": "bad\0key", "value": "value"}], [{"name": "KEY", "value": "bad\0value"}],
+    )
+])
+def test_mcp_rejects_malformed_stdio_before_pi_starts(rig, invalid):
+    bridge = rig.make_bridge()
+    call(bridge, 2, "session/new", cwd=str(rig.cwd), mcpServers=[{**stdio_client(), **invalid}])
+    assert result(bridge, 2)["error"]["code"] == -32602
+    assert rig.preparations == []
+    assert rig.processes == []
+    assert not list(rig.workspace.runtime.rglob("client-mcp.mjs"))
+    assert "synthetic-private-token" not in bridge.output.getvalue().decode()
+
+
+@pytest.mark.parametrize("servers", [None, {}, [None], [1], ["server"],
+    [stdio_client(), stdio_client()],
+] + [
+    [{**stdio_client(), "name": name}] for name in (None, 1, "", "bad/name", "semble")
+])
+def test_mcp_rejects_invalid_server_lists(tmp_path, servers):
+    with pytest.raises(AcpError) as caught:
+        _mcp_extension(tmp_path, servers)
+    assert caught.value.code == -32602
+
+
+@pytest.mark.parametrize("transport", ["http", "stdio"])
+def test_mcp_client_token_is_private_session_data_and_semble_is_preserved(rig, transport):
     bridge = rig.make_bridge()
     client = {
         "type": "http",
@@ -1245,6 +1329,8 @@ def test_mcp_client_token_is_private_session_data_and_semble_is_preserved(rig):
         "url": "http://127.0.0.1:1234/mcp",
         "headers": [{"name": "Authorization", "value": "Bearer test-private-token"}],
     }
+    if transport == "stdio":
+        client = stdio_client("test-private-token")
     call(bridge, 2, "session/new", cwd=str(rig.cwd), mcpServers=[client])
     session_id = result(bridge, 2)["result"]["sessionId"]
     directory = rig.workspace.runtime / "pi" / "acp" / session_id
@@ -1252,6 +1338,8 @@ def test_mcp_client_token_is_private_session_data_and_semble_is_preserved(rig):
     assert "pi.registerMcpServer" in extension.read_text()
     assert "test-private-token" in extension.read_text()
     assert extension.stat().st_mode & 0o777 == 0o600
+    for parent in (directory, directory.parent, directory.parent.parent):
+        assert parent.stat().st_mode & 0o777 == 0o700
     assert "test-private-token" not in bridge.output.getvalue().decode()
     assert "test-private-token" not in (directory / "session.json").read_text()
     assert "--extension" in rig.preparations[0]["args"]
@@ -1259,6 +1347,136 @@ def test_mcp_client_token_is_private_session_data_and_semble_is_preserved(rig):
         _mcp_extension(directory, [{**client, "name": "semble"}])
     assert _mcp_extension(directory, []) is None
     assert not extension.exists()
+
+
+def test_mcp_resume_replaces_credentials_then_removes_absent_servers(rig):
+    first = rig.make_bridge()
+    call(first, 2, "session/new", cwd=str(rig.cwd), mcpServers=[stdio_client("old-token")])
+    session_id = result(first, 2)["result"]["sessionId"]
+    directory = rig.workspace.runtime / "pi" / "acp" / session_id
+    extension = directory / "client-mcp.mjs"
+    first.close()
+    second = rig.make_bridge()
+    call(second, 2, "session/load", sessionId=session_id, cwd=str(rig.cwd),
+         mcpServers=[stdio_client("new-token")])
+    assert "error" not in result(second, 2)
+    assert "new-token" in extension.read_text()
+    assert "old-token" not in extension.read_text()
+    assert extension.stat().st_mode & 0o777 == 0o600
+    assert all(all(token not in path.read_text() for token in ("old-token", "new-token"))
+               for path in directory.rglob("*")
+               if path.is_file() and path != extension)
+    second.close()
+    third = rig.make_bridge()
+    call(third, 2, "session/load", sessionId=session_id, cwd=str(rig.cwd), mcpServers=[])
+    assert "error" not in result(third, 2)
+    assert not extension.exists()
+    assert str(extension) not in rig.preparations[-1]["args"]
+
+
+def test_mcp_credentials_are_isolated_between_sessions(rig):
+    bridge = rig.make_bridge()
+    for request, token in [(2, "first-token"), (3, "second-token")]:
+        call(bridge, request, "session/new", cwd=str(rig.cwd), mcpServers=[stdio_client(token)])
+    sessions = [result(bridge, request)["result"]["sessionId"] for request in (2, 3)]
+    extensions = [rig.workspace.runtime / "pi" / "acp" / session / "client-mcp.mjs"
+                  for session in sessions]
+    assert "first-token" in extensions[0].read_text()
+    assert "second-token" not in extensions[0].read_text()
+    assert "second-token" in extensions[1].read_text()
+    assert "first-token" not in extensions[1].read_text()
+
+
+def test_mcp_stdio_keeps_full_access_gate_and_background_sessions_tool_free(rig):
+    interactive = rig.make_bridge(full_access=False)
+    call(interactive, 2, "session/new", cwd=str(rig.cwd), mcpServers=[stdio_client()])
+    assert "Full access" in result(interactive, 2)["error"]["message"]
+    assert not rig.workspace.runtime.exists()
+    background = rig.make_bridge(full_access=False, name="t3-code-git-text")
+    call(background, 2, "session/new", cwd=str(rig.cwd), mcpServers=[stdio_client()])
+    assert "error" not in result(background, 2)
+    assert rig.preparations[0]["tools"] is False
+    assert all(Path(arg).name != "client-mcp.mjs" for arg in rig.preparations[0]["args"])
+    assert not list(rig.workspace.runtime.rglob("client-mcp.mjs"))
+
+
+@pytest.mark.parametrize("token", [
+    "Bearer synthetic '\"\\ value", "${HOME} $UNSET $$ $!", "!printf must-stay-literal", "",
+])
+def test_cached_native_pi_connects_mcp_stdio_without_inference_and_stops_it(tmp_path, token):
+    binary = Path(__file__).resolve().parents[1] / "build/pi-runtime/pi/pi"
+    if not binary.is_file():
+        pytest.skip("Pinned native Pi runtime is not staged")
+    agent = tmp_path / "agent"
+    agent.mkdir(mode=0o700)
+    (agent / "settings.json").write_text(json.dumps({
+        "enableInstallTelemetry": False, "enableAnalytics": False,
+    }))
+    (agent / "models.json").write_text(json.dumps({"providers": {"fixture": {
+        "api": "openai-completions", "baseUrl": "http://127.0.0.1:1/v1",
+        "apiKey": "unused-offline-fixture",
+        "models": [{"id": "fixture", "name": "Fixture", "reasoning": False,
+                    "input": ["text"], "contextWindow": 65_536, "maxTokens": 4096,
+                    "cost": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0}}],
+    }}}))
+    capture = tmp_path / "stdio.json"
+    tools = tmp_path / "tools.json"
+    client = stdio_client(token)
+    client["command"] = sys.executable
+    client["args"] = [str(Path(__file__).parent / "fixtures" / "stdio_mcp.py"),
+                      str(capture), *client["args"]]
+    extension = _mcp_extension(tmp_path, [client])
+    observer = tmp_path / "observer.mjs"
+    observer.write_text(
+        'import { writeFileSync } from "node:fs";\n'
+        'export default function (pi) {\n'
+        '  pi.registerCommand("fixture-tools", { handler: async () => {\n'
+        f"    writeFileSync({json.dumps(str(tools))}, JSON.stringify(pi.getAllTools()));\n"
+        '  } });\n'
+        # Every ordinary input is consumed before a model request can start.
+        '  pi.on("input", () => ({ action: "handled" }));\n'
+        '}\n'
+    )
+    arguments = [
+        str(binary), "--mode", "rpc", "--offline", "--no-session", "--no-approve",
+        "--no-context-files", "--no-extensions", "--no-skills",
+        "--no-prompt-templates", "--no-themes", "--provider", "fixture", "--model", "fixture",
+        "--extension", "builtin:mcp", "--extension", str(extension),
+        "--extension", str(observer),
+    ]
+    environment = {
+        "PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": str(tmp_path),
+        "PI_CODING_AGENT_DIR": str(agent),
+        "PI_CODING_AGENT_SESSION_DIR": str(tmp_path / "sessions"),
+        "PI_OFFLINE": "1", "PI_SKIP_VERSION_CHECK": "1", "PI_TELEMETRY": "0",
+    }
+    events = []
+    process = PiProcess(arguments, environment, tmp_path, events.append)
+    try:
+        deadline = time.monotonic() + 8
+        while time.monotonic() < deadline:
+            assert process.request("prompt", timeout=5, message="/fixture-tools") == {
+                "disposition": "handled",
+            }
+            if any(tool["name"] == "mcp__t3-code__fixture_echo"
+                   for tool in json.loads(tools.read_text())):
+                break
+            time.sleep(0.02)
+        else:
+            pytest.fail("Pi did not register the synthetic stdio tool")
+        state = json.loads(capture.read_text())
+        assert state["args"] == client["args"][2:]
+        assert state["env"] == {item["name"]: item["value"] for item in client["env"]}
+        assert "initialize" in state["methods"] and "tools/list" in state["methods"]
+        assert not any(event.get("type") == "agent_start" for event in events)
+        assert "synthetic" not in json.dumps(events)
+    finally:
+        process.close()
+    assert process.process.poll() is not None
+    state = json.loads(capture.read_text())
+    assert state["closed"] is True
+    with pytest.raises(ProcessLookupError):
+        os.kill(state["pid"], 0)
 
 
 def test_text_only_model_rejects_images_and_uninstalled_model_without_sending_to_pi(rig):

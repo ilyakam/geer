@@ -127,6 +127,13 @@ def _write_private(path: Path, content: str) -> None:
         temporary.unlink(missing_ok=True)
 
 
+def _pi_config_literal(value: str) -> str:
+    # Pi 0.99.1 resolves env values as config templates. ACP supplies literal
+    # values, so use Pi's escapes for dollars and a leading command marker.
+    escaped = value.replace("$", "$$")
+    return f"${escaped}" if escaped.startswith("!") else escaped
+
+
 def _mcp_extension(directory: Path, servers: Any) -> Path | None:
     if not isinstance(servers, list):
         raise AcpError("mcpServers must be an array", -32602)
@@ -142,23 +149,55 @@ def _mcp_extension(directory: Path, servers: Any) -> Path | None:
             or name in definitions
         ):
             raise AcpError("MCP server name is invalid, duplicated, or reserved", -32602)
-        if server.get("type") != "http" or not isinstance(server.get("url"), str):
-            raise AcpError("Geer's ACP adapter supports HTTP MCP servers only", -32602)
-        if not server["url"].startswith(("http://", "https://")):
-            raise AcpError("MCP server URL must use HTTP or HTTPS", -32602)
-        headers = server.get("headers", [])
-        if not isinstance(headers, list) or any(
-            not isinstance(item, dict)
-            or not isinstance(item.get("name"), str)
-            or not isinstance(item.get("value"), str)
-            for item in headers
-        ):
-            raise AcpError("MCP headers must be name/value pairs", -32602)
-        definitions[name] = {
-            "url": server["url"],
-            "headers": {item["name"]: item["value"] for item in headers},
-            "exposure": "direct",
-        }
+        transport = server.get("type", "stdio")
+        if transport == "http":
+            url = server.get("url")
+            if not isinstance(url, str) or not url.startswith(("http://", "https://")):
+                raise AcpError("MCP server URL must use HTTP or HTTPS", -32602)
+            headers = server.get("headers", [])
+            if not isinstance(headers, list) or any(
+                not isinstance(item, dict)
+                or not isinstance(item.get("name"), str)
+                or not isinstance(item.get("value"), str)
+                for item in headers
+            ):
+                raise AcpError("MCP headers must be name/value pairs", -32602)
+            definitions[name] = {
+                "url": url,
+                "headers": {item["name"]: item["value"] for item in headers},
+                "exposure": "direct",
+            }
+        elif transport == "stdio":
+            # ACP v1's stdio variant has no type discriminator. Pi accepts
+            # command/args/env natively, without a shell or another bridge.
+            command = server.get("command")
+            if not isinstance(command, str) or not command.strip() or "\0" in command:
+                raise AcpError("MCP stdio command must be a nonempty string", -32602)
+            args = server.get("args", [])
+            if not isinstance(args, list) or any(
+                not isinstance(arg, str) or "\0" in arg for arg in args
+            ):
+                raise AcpError("MCP stdio args must be an array of strings", -32602)
+            env = server.get("env", [])
+            if not isinstance(env, list) or any(
+                not isinstance(item, dict)
+                or not isinstance(item.get("name"), str)
+                or not item["name"]
+                or "=" in item["name"]
+                or "\0" in item["name"]
+                or not isinstance(item.get("value"), str)
+                or "\0" in item["value"]
+                for item in env
+            ):
+                raise AcpError("MCP stdio env must be name/value pairs", -32602)
+            definitions[name] = {
+                "command": command,
+                "args": args,
+                "env": {item["name"]: _pi_config_literal(item["value"]) for item in env},
+                "exposure": "direct",
+            }
+        else:
+            raise AcpError("MCP server type must be http or stdio", -32602)
     path = directory / "client-mcp.mjs"
     if not definitions:
         # A previous session's expiring T3 token must not survive a resume that
@@ -170,7 +209,8 @@ def _mcp_extension(directory: Path, servers: Any) -> Path | None:
     _write_private(
         path,
         "export default function (pi) {\n"
-        f"  const servers = {json.dumps(definitions)};\n"
+        # Parse JSON rather than a JS object literal so __proto__ stays data.
+        f"  const servers = JSON.parse({json.dumps(json.dumps(definitions))});\n"
         "  for (const [name, config] of Object.entries(servers)) {\n"
         "    pi.registerMcpServer(name, config);\n"
         "  }\n"

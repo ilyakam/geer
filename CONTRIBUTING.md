@@ -126,6 +126,12 @@ transport, and interactive Geer chats require Full access. Verify the actual
 Pi process, model label, repository tool use, cancellation, and resumed history
 in T3; a direct API canary alone does not prove the integration works.
 
+Client ACP MCP servers can use HTTP or stdio. Stdio uses pinned Pi's native
+transport, which expands `~` and leading `~/` in the executable and each
+argument. Use absolute paths when verifying literal argument forwarding.
+ACP environment values remain literal through Pi's config-value escapes,
+including dollar references and leading `!` characters.
+
 Some commands start a large local model and may require substantial memory.
 State the exact checks you could run and do not present an unrun hardware test
 as passing.
