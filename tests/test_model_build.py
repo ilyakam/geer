@@ -102,9 +102,7 @@ def test_fuse_ornith_experts_rejects_incomplete_expert():
 
 def test_recipe_summary_keeps_activation_manual():
     model_build = load_model_build()
-    recipe = model_build.load_recipe(
-        Path(__file__).parents[1] / "model-recipes" / "ornith-1.5-35b-6bit.toml"
-    )
+    recipe = model_build.load_recipe(model_build.DEFAULT_RECIPE)
 
     summary = model_build.recipe_summary(
         recipe,
@@ -112,9 +110,8 @@ def test_recipe_summary_keeps_activation_manual():
         Path("/tmp/output"),
     )
 
-    assert summary["source_revision"] == (
-        "e4dfb35a93d4b6822a811a7676f3488514abe7e2"
-    )
+    assert summary["source_revision"] == ("0e3205cf441cf01df0c0d238cc4738d0e43b4ca7")
+    assert summary["recipe"] == "sage-a1.5-35b-6bit"
     assert summary["quantization"]["bits"] == 6
     assert summary["activation"] == "manual"
 
@@ -136,9 +133,7 @@ def test_ornith_15_recipes_pin_the_same_source(
     strategy: str | None,
 ):
     model_build = load_model_build()
-    recipe = model_build.load_recipe(
-        Path(__file__).parents[1] / "model-recipes" / recipe_name
-    )
+    recipe = model_build.load_recipe(Path(__file__).parents[1] / "model-recipes" / recipe_name)
 
     assert recipe.source["repo_id"] == "ornith-ai/Ornith-1.5-35B-A3B"
     assert recipe.source["revision"] == "e4dfb35a93d4b6822a811a7676f3488514abe7e2"
@@ -422,6 +417,79 @@ def test_prepare_publication_copies_metadata_and_refreshes_hashes(
     assert model_build.verify_output(recipe, output)["verified"] is True
 
 
+@pytest.mark.parametrize("quant", ["6bit", "4-8bit"])
+def test_sage_recipes_prepare_an_inactive_candidate(
+    quant: str,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+):
+    model_build = load_model_build()
+    monkeypatch.setenv("GEER_HOME", str(tmp_path / "home"))
+    recipe = model_build.load_recipe(
+        Path(__file__).parents[1] / "model-recipes" / f"sage-a1.5-35b-{quant}.toml"
+    )
+    assert not Path(recipe.distribution["model_card_dir"]).is_absolute()
+
+    source_manifest = model_build.source_manifest_path(recipe)
+    model_build.atomic_json(source_manifest, {"recipe": recipe.identifier, "files": []})
+    output = tmp_path / "candidate"
+    output.mkdir()
+    weights = output / "synthetic.safetensors"
+    weights.write_bytes(b"synthetic weights, no model loaded")
+    weight_hash = model_build.sha256_file(weights)
+    params = {key: recipe.quantization[key] for key in ("bits", "group_size", "mode")}
+    config = {
+        "model_type": recipe.output["expected_architecture"],
+        "quantization": params,
+        "vision_config": {"model_type": "qwen3_5"},
+    }
+    predicate = model_build.quantization_predicate(recipe)
+    if predicate is not None:
+        for path in (
+            "language_model.model.layers.0.mlp.switch_mlp.gate_proj",
+            "language_model.model.layers.0.self_attn.q_proj",
+        ):
+            params[path] = predicate(path, None)
+    model_build.atomic_json(output / "config.json", config)
+    model_build.atomic_json(
+        output / "model.safetensors.index.json",
+        {"weight_map": {"vision_tower.synthetic": weights.name}},
+    )
+    files = model_build.hash_files(output)
+    model_build.atomic_json(
+        output / model_build.BUILD_MANIFEST,
+        {
+            "recipe": recipe.identifier,
+            "display_name": recipe.data["display_name"],
+            "source": recipe.source,
+            "quantization": recipe.quantization,
+            "files": files,
+            "bytes": sum(record["bytes"] for record in files),
+        },
+    )
+
+    result = model_build.prepare_publication(recipe, output)
+    assert result["verified"] is True
+    assert result["activation"] == "manual"
+    assert model_build.sha256_file(weights) == weight_hash
+    for name, template in model_build.publication_files(recipe).items():
+        assert (output / name).read_bytes() == template.read_bytes()
+    summary = model_build.publication_summary(recipe, output)
+    assert summary["repo_id"] == f"ilyakam/Geer-Sage-A1.5-35B-A3B-{quant}-MLX"
+    assert summary["visibility"] == "private until verified"
+    assert not (model_build.geer_home() / "models" / "active").exists()
+
+
+def test_install_requires_an_immutable_distribution_revision(tmp_path: Path):
+    model_build = load_model_build()
+    recipe = model_build.Recipe(
+        path=tmp_path / "recipe.toml",
+        data={"distribution": {"repo_id": "example/unpublished", "tag": "v1"}},
+    )
+    with pytest.raises(model_build.BuildError, match="pinned distribution revision"):
+        model_build.distribution_revision(recipe)
+
+
 def test_activate_snapshot_keeps_previous_symlink(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -514,8 +582,8 @@ def test_install_published_reuses_verified_active_model(
     tmp_path: Path,
 ):
     model_build = load_model_build()
-    model = tmp_path / "candidate"
-    model.mkdir()
+    model = tmp_path / "cache/models--example--model/snapshots" / ("b" * 40)
+    model.mkdir(parents=True)
     active = tmp_path / "models" / "active"
     active.parent.mkdir()
     active.symlink_to(model)
@@ -553,9 +621,9 @@ def test_install_published_keeps_a_different_active_model_for_rollback(
 ):
     model_build = load_model_build()
     old = tmp_path / "old-model"
-    new = tmp_path / "new-model"
+    new = tmp_path / "cache/models--example--new-model/snapshots" / ("c" * 40)
     old.mkdir()
-    new.mkdir()
+    new.mkdir(parents=True)
     active = tmp_path / "home/models/active"
     active.parent.mkdir(parents=True)
     active.symlink_to(old)
@@ -596,3 +664,80 @@ def test_install_published_keeps_a_different_active_model_for_rollback(
     assert result["activation"]["target"] == str(new.resolve())
     assert active.resolve() == new.resolve()
     assert (active.parent / "previous").resolve() == old.resolve()
+
+
+def test_candidate_active_does_not_bypass_published_snapshot_identity(monkeypatch, tmp_path):
+    build = load_model_build()
+    monkeypatch.setenv("GEER_HOME", str(tmp_path / "home"))
+    candidate = tmp_path / "candidate"
+    candidate.mkdir()
+    active = build.geer_home() / "models/active"
+    active.parent.mkdir(parents=True)
+    active.symlink_to(candidate)
+    recipe = build.Recipe(
+        tmp_path / "recipe.toml",
+        {
+            "distribution": {"repo_id": "example/model", "revision": "a" * 40},
+        },
+    )
+    monkeypatch.setattr(
+        build, "verify_output", lambda *a: pytest.fail("candidate verification bypass")
+    )
+
+    def stop_at_plan(*a):
+        raise build.BuildError("download required")
+
+    monkeypatch.setattr(build, "published_install_plan", stop_at_plan)
+    with pytest.raises(build.BuildError, match="download required"):
+        build.install_published(recipe, tmp_path / "cache")
+    assert active.resolve() == candidate
+
+
+def test_download_only_published_install_never_changes_active_or_previous(monkeypatch, tmp_path):
+    build = load_model_build()
+    monkeypatch.setenv("GEER_HOME", str(tmp_path / "home"))
+    recipe = build.Recipe(
+        tmp_path / "recipe.toml",
+        {
+            "distribution": {"repo_id": "example/model", "revision": "a" * 40},
+        },
+    )
+    target = build.published_snapshot_path(recipe, tmp_path / "cache")
+    target.mkdir(parents=True)
+    prior = tmp_path / "previous"
+    prior.mkdir()
+    active = build.geer_home() / "models/active"
+    active.parent.mkdir(parents=True)
+    active.symlink_to(prior)
+    monkeypatch.setattr(
+        build,
+        "verify_output",
+        lambda recipe, path: {
+            "output_dir": str(path),
+            "verified": True,
+        },
+    )
+    monkeypatch.setattr(build, "activate_snapshot", lambda *a, **k: pytest.fail("activation"))
+    result = build.install_published(recipe, tmp_path / "cache", activate=False)
+    assert result["activation"] is None
+    assert active.resolve() == prior
+    assert not (active.parent / "previous").exists()
+
+
+def test_wrong_revision_and_candidate_symlink_are_not_approved_snapshots(tmp_path):
+    build = load_model_build()
+    recipe = build.Recipe(
+        tmp_path / "recipe.toml",
+        {
+            "distribution": {"repo_id": "example/model", "revision": "a" * 40},
+        },
+    )
+    expected = build.published_snapshot_path(recipe, tmp_path / "cache")
+    expected.parent.mkdir(parents=True)
+    stale = expected.with_name("b" * 40)
+    stale.mkdir()
+    with pytest.raises(build.BuildError, match="exact approved"):
+        build.verify_published_snapshot(recipe, stale, tmp_path / "cache")
+    expected.symlink_to(stale)
+    with pytest.raises(build.BuildError, match="exact approved"):
+        build.verify_published_snapshot(recipe, expected, tmp_path / "cache")

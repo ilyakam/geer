@@ -8,6 +8,8 @@ all tools disabled instead. Pi's own JSONL files remain the session authority.
 
 from __future__ import annotations
 
+import base64
+import binascii
 import fcntl
 import json
 import os
@@ -31,6 +33,7 @@ from .skills import inspect_skill_commands, skill_paths
 PROTOCOL_VERSION = 1
 RPC_TIMEOUT = 30
 PROMPT_TIMEOUT = 1800
+IMAGE_MIME_TYPES = {"image/png", "image/jpeg", "image/gif", "image/webp"}
 FULL_ACCESS_MESSAGE = (
     "Geer Pi currently supports T3 Full access mode only. Approval-required, "
     "auto-accept edits, automatic approval, and plan modes are not supported. "
@@ -66,6 +69,7 @@ def model_state(workspace: Workspace) -> dict[str, Any]:
                 "description": "Local model served by Geer through Pi",
                 "_meta": {
                     "contextWindow": profile.max_context_window,
+                    "inputModalities": manifest.get("input_modalities", ["text"]),
                     "supportsReasoningEffort": False,
                 },
             }
@@ -123,6 +127,13 @@ def _write_private(path: Path, content: str) -> None:
         temporary.unlink(missing_ok=True)
 
 
+def _pi_config_literal(value: str) -> str:
+    # Pi 0.99.1 resolves env values as config templates. ACP supplies literal
+    # values, so use Pi's escapes for dollars and a leading command marker.
+    escaped = value.replace("$", "$$")
+    return f"${escaped}" if escaped.startswith("!") else escaped
+
+
 def _mcp_extension(directory: Path, servers: Any) -> Path | None:
     if not isinstance(servers, list):
         raise AcpError("mcpServers must be an array", -32602)
@@ -138,23 +149,55 @@ def _mcp_extension(directory: Path, servers: Any) -> Path | None:
             or name in definitions
         ):
             raise AcpError("MCP server name is invalid, duplicated, or reserved", -32602)
-        if server.get("type") != "http" or not isinstance(server.get("url"), str):
-            raise AcpError("Geer's ACP adapter supports HTTP MCP servers only", -32602)
-        if not server["url"].startswith(("http://", "https://")):
-            raise AcpError("MCP server URL must use HTTP or HTTPS", -32602)
-        headers = server.get("headers", [])
-        if not isinstance(headers, list) or any(
-            not isinstance(item, dict)
-            or not isinstance(item.get("name"), str)
-            or not isinstance(item.get("value"), str)
-            for item in headers
-        ):
-            raise AcpError("MCP headers must be name/value pairs", -32602)
-        definitions[name] = {
-            "url": server["url"],
-            "headers": {item["name"]: item["value"] for item in headers},
-            "exposure": "direct",
-        }
+        transport = server.get("type", "stdio")
+        if transport == "http":
+            url = server.get("url")
+            if not isinstance(url, str) or not url.startswith(("http://", "https://")):
+                raise AcpError("MCP server URL must use HTTP or HTTPS", -32602)
+            headers = server.get("headers", [])
+            if not isinstance(headers, list) or any(
+                not isinstance(item, dict)
+                or not isinstance(item.get("name"), str)
+                or not isinstance(item.get("value"), str)
+                for item in headers
+            ):
+                raise AcpError("MCP headers must be name/value pairs", -32602)
+            definitions[name] = {
+                "url": url,
+                "headers": {item["name"]: item["value"] for item in headers},
+                "exposure": "direct",
+            }
+        elif transport == "stdio":
+            # ACP v1's stdio variant has no type discriminator. Pi accepts
+            # command/args/env natively, without a shell or another bridge.
+            command = server.get("command")
+            if not isinstance(command, str) or not command.strip() or "\0" in command:
+                raise AcpError("MCP stdio command must be a nonempty string", -32602)
+            args = server.get("args", [])
+            if not isinstance(args, list) or any(
+                not isinstance(arg, str) or "\0" in arg for arg in args
+            ):
+                raise AcpError("MCP stdio args must be an array of strings", -32602)
+            env = server.get("env", [])
+            if not isinstance(env, list) or any(
+                not isinstance(item, dict)
+                or not isinstance(item.get("name"), str)
+                or not item["name"]
+                or "=" in item["name"]
+                or "\0" in item["name"]
+                or not isinstance(item.get("value"), str)
+                or "\0" in item["value"]
+                for item in env
+            ):
+                raise AcpError("MCP stdio env must be name/value pairs", -32602)
+            definitions[name] = {
+                "command": command,
+                "args": args,
+                "env": {item["name"]: _pi_config_literal(item["value"]) for item in env},
+                "exposure": "direct",
+            }
+        else:
+            raise AcpError("MCP server type must be http or stdio", -32602)
     path = directory / "client-mcp.mjs"
     if not definitions:
         # A previous session's expiring T3 token must not survive a resume that
@@ -166,7 +209,8 @@ def _mcp_extension(directory: Path, servers: Any) -> Path | None:
     _write_private(
         path,
         "export default function (pi) {\n"
-        f"  const servers = {json.dumps(definitions)};\n"
+        # Parse JSON rather than a JS object literal so __proto__ stays data.
+        f"  const servers = JSON.parse({json.dumps(json.dumps(definitions))});\n"
         "  for (const [name, config] of Object.entries(servers)) {\n"
         "    pi.registerMcpServer(name, config);\n"
         "  }\n"
@@ -226,6 +270,41 @@ export default function (pi) {
   });
 }
 """,
+    )
+    return path
+
+
+def _image_extension(directory: Path) -> Path:
+    path = directory / "images.mjs"
+    _write_private(
+        path,
+        r'''import { resizeImage, formatDimensionNote } from "@earendil-works/pi-coding-agent";
+
+export default function (pi) {
+  pi.on("input", async (event, ctx) => {
+    if (event.source !== "rpc" || !event.images?.length) return { action: "continue" };
+    const images = [];
+    const hints = [];
+    try {
+      for (const image of event.images) {
+        const resized = await resizeImage(Buffer.from(image.data, "base64"), image.mimeType,
+          ctx.model?.inputLimits?.images?.resize);
+        if (!resized) throw new Error("An attachment could not be decoded or resized");
+        images.push({ type: "image", data: resized.data, mimeType: resized.mimeType });
+        const hint = formatDimensionNote(resized);
+        if (hint) hints.push(hint);
+      }
+    } catch (error) {
+      ctx.ui.notify(`Geer image input failed: ${error.message}`, "error");
+      // Pi catches thrown input-handler errors and continues. Explicitly handle
+      // rejection before it can normalize failures into text and start a run.
+      return { action: "handled" };
+    }
+    return { action: "transform", images,
+      text: hints.length ? `${event.text}\n\n${hints.join("\n")}` : event.text };
+  });
+}
+''',
     )
     return path
 
@@ -391,6 +470,7 @@ class Session:
     directory: Path
     lock_file: BinaryIO
     tools: bool
+    image_input: bool = False
     process: PiProcess | None = None
     models: dict[str, Any] = field(default_factory=dict)
     settled: threading.Event = field(default_factory=threading.Event)
@@ -473,10 +553,13 @@ def _correct_t3_runtime_info(text: str) -> str:
     return f"{match[1]}Pi{match[2]}" if match else text
 
 
-def _prompt_text(blocks: Any, *, client_name: str = "") -> str:
+def _prompt_content(
+    blocks: Any, *, image_input: bool = False, client_name: str = ""
+) -> tuple[str, list[dict[str, str]]]:
     if not isinstance(blocks, list) or not blocks:
-        raise AcpError("A non-empty text prompt is required", -32602)
+        raise AcpError("A non-empty prompt is required", -32602)
     texts: list[str] = []
+    images: list[dict[str, str]] = []
     for index, block in enumerate(blocks):
         if not isinstance(block, dict):
             raise AcpError("Invalid prompt content", -32602)
@@ -486,6 +569,24 @@ def _prompt_text(blocks: Any, *, client_name: str = "") -> str:
             if client_name == "t3-code" and index == len(blocks) - 1 and index > 0:
                 text = _correct_t3_runtime_info(text)
             texts.append(text)
+        elif block.get("type") == "image":
+            if not image_input:
+                raise AcpError("The selected local model does not support image input", -32602)
+            mime_type = block.get("mimeType")
+            if not isinstance(mime_type, str) or mime_type not in IMAGE_MIME_TYPES:
+                raise AcpError("Images must use PNG, JPEG, GIF, or WebP MIME types", -32602)
+            data = block.get("data")
+            if not isinstance(data, str) or not data:
+                raise AcpError(
+                    "Images require inline base64 data; URI-only images are unsupported", -32602
+                )
+            try:
+                decoded = base64.b64decode(data, validate=True)
+            except (ValueError, binascii.Error) as error:
+                raise AcpError("Image data must be valid base64", -32602) from error
+            if not decoded:
+                raise AcpError("Image data must not be empty", -32602)
+            images.append({"type": "image", "data": data, "mimeType": block["mimeType"]})
         elif block.get("type") == "resource" and isinstance(block.get("resource"), dict):
             resource = block["resource"]
             if not isinstance(resource.get("text"), str):
@@ -495,12 +596,13 @@ def _prompt_text(blocks: Any, *, client_name: str = "") -> str:
             texts.append(f"Attached resource: {block.get('name', '')} {block['uri']}")
         else:
             raise AcpError(
-                "Geer's current local model accepts text, not image or audio input", -32602
+                "Unsupported prompt content; Geer accepts text, inline images, and text resources",
+                -32602,
             )
     message = "\n\n".join(texts)
-    if not message.strip():
-        raise AcpError("A non-empty text prompt is required", -32602)
-    return message
+    if not message.strip() and not images:
+        raise AcpError("A non-empty prompt is required", -32602)
+    return message, images
 
 
 class AcpBridge:
@@ -573,7 +675,9 @@ class AcpBridge:
                 and event.get("method") == "notify"
                 and event.get("notifyType") == "error"
                 and isinstance(message, str)
-                and message.startswith("Geer skill selection failed: ")
+                and message.startswith((
+                    "Geer skill selection failed: ", "Geer image input failed: ",
+                ))
             ):
                 session.error = message
                 session.settled.set()
@@ -752,6 +856,7 @@ class AcpBridge:
                 descriptor = os.open(session_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
                 os.close(descriptor)
             arguments.extend(["--session", str(session_file)])
+            arguments.extend(["--extension", str(_image_extension(directory))])
             extension = _mcp_extension(directory, params.get("mcpServers", []) if tools else [])
             if extension is not None:
                 arguments.extend(["--extension", str(extension)])
@@ -774,6 +879,7 @@ class AcpBridge:
             models = [model for model in available if model.get("provider") == "geer"]
             if not models or current.get("provider") != "geer":
                 raise AcpError("Pi did not select the local Geer model")
+            session.image_input = "image" in current.get("input", [])
             session.models = {
                 "currentModelId": current["id"],
                 "availableModels": [
@@ -782,6 +888,7 @@ class AcpBridge:
                         "name": model.get("name", model["id"]),
                         "_meta": {
                             "contextWindow": model.get("contextWindow"),
+                            "inputModalities": model.get("input", ["text"]),
                             "supportsReasoningEffort": False,
                         },
                     }
@@ -844,6 +951,11 @@ class AcpBridge:
             for block in content:
                 if role == "user" and block.get("type") == "text":
                     self._chunk(session, "user_message_chunk", block.get("text", ""))
+                elif role == "user" and block.get("type") == "image":
+                    self.update(session, {
+                        "sessionUpdate": "user_message_chunk",
+                        "content": {key: block[key] for key in ("type", "data", "mimeType")},
+                    })
                 elif role == "assistant" and block.get("type") in {"text", "thinking"}:
                     kind = block["type"]
                     channel = "agent_message_chunk" if kind == "text" else "agent_thought_chunk"
@@ -870,7 +982,9 @@ class AcpBridge:
                     },
                 )
 
-    def _prompt(self, identifier: Any, session: Session, text: str) -> None:
+    def _prompt(
+        self, identifier: Any, session: Session, text: str, images: list[dict[str, str]]
+    ) -> None:
         result = None
         failure = None
         try:
@@ -881,7 +995,8 @@ class AcpBridge:
                 self._chunk(session, "agent_message_chunk", "Context compacted.")
             else:
                 accepted = session.rpc(
-                    "prompt", timeout=PROMPT_TIMEOUT, message=text, dispatched=session.dispatched
+                    "prompt", timeout=PROMPT_TIMEOUT, message=text, dispatched=session.dispatched,
+                    **({"images": images} if images else {}),
                 )
                 # Pi can acknowledge a prompt after an asynchronous preflight.
                 # An earlier abort while Pi was idle does not cancel that prompt.
@@ -889,6 +1004,10 @@ class AcpBridge:
                     session.rpc("clear_queue")
                     session.rpc("abort", timeout=15)
                 handled = accepted.get("disposition") == "handled"
+                if handled and images and not session.error and not session.cancelled:
+                    raise AcpError(
+                        "Pi handled the command without sending its attached images"
+                    )
                 state = session.rpc("get_state") if handled else {}
                 idle = handled and not state.get("isStreaming") and not state.get("isCompacting")
                 if not idle and not session.settled.wait(PROMPT_TIMEOUT):
@@ -954,6 +1073,8 @@ class AcpBridge:
 
                 client = params.get("clientInfo", {})
                 self.client_name = client.get("name", "") if isinstance(client, dict) else ""
+                models = model_state(self.workspace)
+                inputs = models["availableModels"][0]["_meta"]["inputModalities"]
                 self.initialized = True
                 self.reply(
                     identifier,
@@ -974,10 +1095,12 @@ class AcpBridge:
                         "agentCapabilities": {
                             "loadSession": True,
                             "mcpCapabilities": {"http": True},
-                            "promptCapabilities": {"embeddedContext": True},
+                            "promptCapabilities": {
+                                "embeddedContext": True, "image": "image" in inputs,
+                            },
                         },
                         "_meta": {
-                            "modelState": model_state(self.workspace),
+                            "modelState": models,
                             "availableCommands": [],
                         },
                     },
@@ -997,7 +1120,14 @@ class AcpBridge:
             if session is None:
                 raise AcpError("Unknown Geer session", -32602)
             if method == "session/prompt":
-                text = _prompt_text(params.get("prompt"), client_name=self.client_name)
+                text, images = _prompt_content(
+                    params.get("prompt"), image_input=session.image_input,
+                    client_name=self.client_name,
+                )
+                if images and text.lstrip().startswith("/"):
+                    raise AcpError(
+                        "Images cannot be attached to Pi commands; send a prompt instead", -32602
+                    )
                 if re.match(r"^/plan(?:\s|$)", text.lstrip(), re.IGNORECASE):
                     raise AcpError(
                         "Geer Pi does not support Plan mode. Use a harness with enforced "
@@ -1016,7 +1146,7 @@ class AcpBridge:
                 session.settled.clear()
                 session.dispatched.clear()
                 threading.Thread(
-                    target=self._prompt, args=(identifier, session, text), daemon=True
+                    target=self._prompt, args=(identifier, session, text, images), daemon=True
                 ).start()
             elif method == "session/cancel":
                 session.cancelled = True
@@ -1048,6 +1178,11 @@ class AcpBridge:
                     )
                 session.rpc("set_model", provider="geer", modelId=model_id)
                 session.models["currentModelId"] = model_id
+                selected = next(
+                    model for model in session.models["availableModels"]
+                    if model["modelId"] == model_id
+                )
+                session.image_input = "image" in selected["_meta"]["inputModalities"]
                 self.reply(identifier, {})
             elif method == "session/set_mode":
                 expected = "full-access" if session.tools else "text-only"

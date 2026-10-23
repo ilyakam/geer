@@ -66,18 +66,21 @@ def test_pi_environment_isolates_credentials_and_keeps_shell_configuration(tmp_p
 
 @pytest.mark.parametrize(
     ("memory_gib", "context_window"),
-    [(32, 65_536), (48, 131_072), (64, 262_144)],
+    [(32, 65_536), (48, 131_072), (64, 262_144), (128, 262_144)],
 )
+@pytest.mark.parametrize("input_modalities", [["text"], ["text", "image"]])
 def test_pi_config_routes_to_authenticated_local_openai_endpoint(
     tmp_path: Path,
     memory_gib: int,
     context_window: int,
+    input_modalities: list[str],
 ) -> None:
     workspace = Workspace(tmp_path)
     manifest = {
         "model_id": "geer-local",
         "context_length": 262_144,
         "build": {"display_name": "Geer Test Model"},
+        "input_modalities": input_modalities,
     }
     legacy = workspace.runtime / "claude" / "auth.json"
     legacy.parent.mkdir(parents=True)
@@ -98,6 +101,7 @@ def test_pi_config_routes_to_authenticated_local_openai_endpoint(
     assert provider["authHeader"] is True
     assert provider["models"][0]["id"] == "geer-local"
     assert provider["models"][0]["name"] == "Geer Test Model"
+    assert provider["models"][0]["input"] == input_modalities
     assert provider["models"][0]["contextWindow"] == context_window
     assert provider["models"][0]["compat"]["thinkingFormat"] == "qwen-chat-template"
     assert status["context_window"] == context_window
@@ -227,7 +231,7 @@ def test_compatible_pi_requires_exact_pinned_version_without_downloads(
 
 def test_pi_version_probe_can_respect_t3_inspection_timeout(tmp_path, monkeypatch):
     command = tmp_path / "slow-pi"
-    command.write_text(f"#!{sys.executable}\nimport time\ntime.sleep(5)\nprint('0.99.1')\n")
+    command.write_text(f"#!{sys.executable}\nimport time\ntime.sleep(5)\nprint('1.4.0')\n")
     command.chmod(0o755)
     monkeypatch.setenv("GEER_PI_BIN", str(command))
     started = time.monotonic()

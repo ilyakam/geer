@@ -1,0 +1,30 @@
+schema_version = 1
+id = "sage-a1.5-35b-6bit"
+display_name = "Geer Sage-A1.5 35B-A3B (6-bit MLX)"
+
+[source]
+repo_id = "InternScience/Sage-A1.5"
+revision = "0e3205cf441cf01df0c0d238cc4738d0e43b4ca7"
+expected_bytes = 71931809355
+license = "Apache-2.0"
+license_evidence_url = "https://huggingface.co/InternScience/Sage-A1.5/blob/0e3205cf441cf01df0c0d238cc4738d0e43b4ca7/README.md"
+
+[conversion]
+transform = "qwen3_5_moe_unfused_experts"
+dtype = "bfloat16"
+mlx = "0.32.0"
+mlx_lm = "0.31.3"
+mlx_vlm = "0.6.3"
+huggingface_hub = "1.24.0"
+hf_xet = "1.5.2"
+safetensors = "0.8.0"
+
+[quantization]
+enabled = true
+mode = "affine"
+bits = 6
+group_size = 64
+
+[output]
+expected_architecture = "qwen3_5_moe"
+preserve_multimodal = true

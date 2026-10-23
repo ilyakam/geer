@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 DEFAULT_MODEL_ID = "geer-local"
-DEFAULT_MODEL_ALIAS = "Geer Ornith 1.5 35B-A3B (6-bit MLX)"
+DEFAULT_MODEL_ALIAS = "Geer Sage-A1.5 35B-A3B (6-bit MLX)"
 DEFAULT_MODEL_SOURCE = Path("~/.geer/models/active").expanduser()
 BUILD_MANIFEST = "geer-build-manifest.json"
 REQUIRED_FILES = {
@@ -38,8 +38,34 @@ def model_alias(manifest: dict[str, Any]) -> str:
         return build["display_name"]
     quantization = manifest.get("quantization")
     if isinstance(quantization, dict) and isinstance(quantization.get("bits"), int):
-        return f"Geer Ornith 1.5 35B-A3B ({quantization['bits']}-bit MLX)"
+        family = "Ornith 1.5" if model_family(manifest) == "ornith" else "Sage-A1.5"
+        build = manifest.get("build", {})
+        recipe = build.get("recipe", "") if isinstance(build, dict) else ""
+        bits = (
+            "4/8" if isinstance(recipe, str) and recipe.endswith("4-8bit") else quantization["bits"]
+        )
+        return f"Geer {family} 35B-A3B ({bits}-bit MLX)"
+    if model_family(manifest) == "ornith":
+        return "Geer Ornith 1.5 35B-A3B"
     return DEFAULT_MODEL_ALIAS
+
+
+def model_family(manifest: dict[str, Any]) -> str | None:
+    build = manifest.get("build", manifest)
+    if isinstance(build, dict):
+        recipe = build.get("recipe", "")
+        if isinstance(recipe, str):
+            for family in ("sage", "ornith"):
+                if recipe.startswith(f"{family}-"):
+                    return family
+    return None
+
+
+def _input_modalities(config: dict[str, Any]) -> list[str]:
+    # The selected Qwen-family VLM declares its image tower in vision_config.
+    # This describes model inputs, not measured image-serving qualification.
+    vision = config.get("vision_config")
+    return ["text", "image"] if isinstance(vision, dict) and vision else ["text"]
 
 
 @dataclass(frozen=True)
@@ -256,6 +282,7 @@ def initialize_assets(
         "source_version": _read_optional_text(source / "version.txt"),
         "architecture": config.get("architectures"),
         "model_type": config.get("model_type"),
+        "input_modalities": _input_modalities(config),
         "context_length": _context_length(config),
         "quantization": {
             key: value
@@ -309,6 +336,9 @@ def verify_assets(
             raise AssetError(f"asset size changed: {resolved}")
         if verify_hashes and _sha256(resolved) != entry.get("sha256"):
             raise AssetError(f"asset hash changed: {resolved}")
+    # Derive capabilities from the verified model links, including installations
+    # whose saved manifest predates input_modalities. Probes never rewrite state.
+    manifest["input_modalities"] = _input_modalities(_load_json(link_root / "config.json"))
     return manifest
 
 

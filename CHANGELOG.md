@@ -5,6 +5,36 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-10-23
+
+### Added
+
+- Experiment history with results, limitations, and conditions for revisiting.
+- Forward images to supported models through Pi
+- Pinned Sage-A1.5 6-bit and mixed 4/8-bit conversion recipes, model cards,
+  attribution evidence, and publication instructions.
+- Hardware-aware Sage-A1.5 and Ornith 1.5 choices in the initial terminal and
+  native setup wizard, with verified local availability, download and disk
+  estimates, and selected upstream benchmark results.
+
+### Changed
+
+- Recommend Sage-A1.5 while preserving eligible confirmed choices, verified
+  legacy activation, or a sole verified current compatible cached family.
+  Both families retain images and use the existing memory profiles.
+- Retain the confirmed model choice on upgrades and reinstalls. Model commands
+  support both families; `model add` downloads and verifies without changing
+  the active choice. Explicit activation retains histories and rollback.
+- Upgrade the pinned Pi harness to official stable 1.4.0.
+- Use T3's native Pi driver for Geer, preserving local background generation
+  and migrating managed model selections without the Grok version warning.
+- Pin fresh T3 installations to stable 0.1.2 and retain compatible Nightly apps.
+
+### Fixed
+
+- Preserve native Pi thinking preferences across setup and status checks.
+- Accept ACP stdio MCP servers from current T3 Code alongside HTTP servers.
+
 ## [0.3.0] - 2026-10-01
 
 ### Added
@@ -63,7 +93,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - End-to-end onboarding validation in an isolated macOS account.
 - Contributor documentation, licensing, and Geer artwork.
 
-[Unreleased]: https://github.com/ilyakam/geer/compare/0.3.0...HEAD
+[0.4.0]: https://github.com/ilyakam/geer/compare/0.3.0...0.4.0
 [0.3.0]: https://github.com/ilyakam/geer/compare/0.2.0...0.3.0
 [0.2.0]: https://github.com/ilyakam/geer/compare/0.1.0...0.2.0
 [0.1.0]: https://github.com/ilyakam/geer/releases/tag/0.1.0

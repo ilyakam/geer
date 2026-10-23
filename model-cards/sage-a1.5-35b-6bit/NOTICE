@@ -1,0 +1,59 @@
+Geer Sage-A1.5 35B-A3B (6-bit MLX)
+
+Source model and declared lineage
+
+  InternScience/Sage-A1.5, Shanghai AI Laboratory
+  Revision: 0e3205cf441cf01df0c0d238cc4738d0e43b4ca7
+  https://huggingface.co/InternScience/Sage-A1.5/tree/0e3205cf441cf01df0c0d238cc4738d0e43b4ca7
+
+The pinned Sage model card declares Apache-2.0 and identifies Qwen3.6-35B-A3B
+and Agents-A1 as its bases. Its complete snapshot lists no LICENSE or NOTICE
+file. LICENSE supplies the standard Apache License 2.0 text. This NOTICE is
+Geer's attribution and modification record, not an upstream NOTICE file.
+The standard LICENSE text comes from
+https://www.apache.org/licenses/LICENSE-2.0.txt
+SHA-256: cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30
+
+  Qwen/Qwen3.6-35B-A3B
+  License evidence revision: 995ad96eacd98c81ed38be0c5b274b04031597b0
+  Copyright 2026 Alibaba Cloud
+  https://huggingface.co/Qwen/Qwen3.6-35B-A3B/blob/995ad96eacd98c81ed38be0c5b274b04031597b0/LICENSE
+
+LICENSE-QWEN is a byte-for-byte copy of that Qwen Apache-2.0 license,
+including its copyright statement. SHA-256:
+50cbab8a892c5f2993b8c7351a99182507472def3b1374558308605d99b86b32
+
+  InternScience/Agents-A1, Shanghai AI Laboratory and contributors
+  License evidence revision: e4a30b76e439b5093ac4c14efa6017718781d48f
+  https://huggingface.co/InternScience/Agents-A1/blob/e4a30b76e439b5093ac4c14efa6017718781d48f/README.md
+
+That Agents-A1 model card declares Apache-2.0. Its snapshot lists no separate
+LICENSE or NOTICE file. README.md SHA-256:
+e3252696bd8c38283a24ad7d8bf7c53bc804e5099ccc2adc8ebcc06fc066f4db
+
+These are immutable license-evidence snapshots. Sage does not identify the
+exact parent weight revisions used during training. The evidence revisions
+therefore do not claim to reproduce that training lineage. No license terms
+from unrelated training code or datasets are asserted to cover these weights.
+
+Geer modifications
+
+Geer converts the BF16 source into affine 6-bit MLX weights with group size
+64. It fuses individually stored routed experts, retains the native vision
+tower in BF16, and omits native MTP tensors through MLX-VLM 0.6.3's sanitizer.
+The converted model-*.safetensors files, model.safetensors.index.json, and
+config.json reflect these changes. MLX-VLM rewrites tokenizer/processor
+metadata where required by its conversion path. The source and build
+manifests identify the exact original and output files and their hashes.
+Geer replaces the source model card with its conversion card and adds
+licenses, this attribution record, the recipe, and provenance manifests.
+
+Conversion tooling and original publication metadata:
+  Copyright (c) 2026 Ilya Kaminsky
+  https://github.com/ilyakam/geer
+
+The model remains subject to Apache-2.0. Geer's project license applies to
+Geer's original tooling and does not replace upstream model terms. This
+NOTICE adds attribution information and does not modify the license.
+All third-party names and marks belong to their owners. Geer is independent
+of Shanghai AI Laboratory, the Agents-A1 contributors, and Alibaba Cloud.

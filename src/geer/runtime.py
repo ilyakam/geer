@@ -19,7 +19,14 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, NoReturn
 
-from .assets import DEFAULT_MODEL_ID, AssetError, Workspace, model_alias, verify_assets
+from .assets import (
+    DEFAULT_MODEL_ID,
+    AssetError,
+    Workspace,
+    model_alias,
+    model_family,
+    verify_assets,
+)
 from .hardware import select_hardware_profile
 from .pi_distribution import PI_REVISION, PI_VERSION, PiDistributionError, install_pi
 from .prompt import geer_system_prompt
@@ -1113,6 +1120,7 @@ def ensure_pi_config(
     profile = select_hardware_profile(
         total_memory_bytes,
         native_context_window=int(manifest.get("context_length", 262_144)),
+        family=model_family(manifest) or "sage",
     )
     model_id = str(manifest["model_id"])
     models = _private_json_object(config / "models.json")
@@ -1128,7 +1136,7 @@ def ensure_pi_config(
             "id": model_id,
             "name": model_alias(manifest),
             "reasoning": True,
-            "input": ["text"],
+            "input": manifest.get("input_modalities", ["text"]),
             "contextWindow": profile.max_context_window,
             "maxTokens": min(16_384, profile.max_context_window // 4),
             "cost": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0},
@@ -1330,6 +1338,7 @@ def ensure_model_settings(
     hardware_profile = select_hardware_profile(
         total_memory_bytes,
         native_context_window=native_context_window,
+        family=model_family(manifest) or "sage",
     )
     path = workspace.omlx_model_settings
     try:

@@ -18,15 +18,19 @@ distribution and download manifests are the canonical immutable inputs.
 
 ## Pi installation
 
-Geer setup downloads Pi 0.99.1 directly from its
-[official upstream release](https://github.com/earendil-works/pi/releases/tag/v0.99.1).
+Geer setup downloads Pi 1.4.0 directly from its
+[official upstream release](https://github.com/earendil-works/pi/releases/tag/v1.4.0).
 The installer ships Geer's adapter and the integrity/provenance manifest in
 `packaging/pi-runtime.json`; it does not redistribute the standalone Pi binary.
-The manifest pins source revision `d86654abb8862e201933517d6f1fce9f88dd117f` and
-links the release's corresponding source archive.
+The manifest pins source revision `4a080252f06caf63a525d7873c5d94d3c23887e0` and
+links the release's corresponding source archive. The Darwin arm64 archive is
+31,098,931 bytes with SHA-256
+`79d9979d76a2a5adb7c28e27e9b44629928ccd0dc9fbb6ae7217860bd5e8be5d`.
+The source archive is 8,180,850 bytes with SHA-256
+`12b14a5d812e049a0b22449e2589ee7647c31f00f93bb97d8d25aff0e71920da`.
 
 Pi's original code is MIT licensed, copyright Mario Zechner 2025. See its
-[license at the pinned revision](https://github.com/earendil-works/pi/blob/d86654abb8862e201933517d6f1fce9f88dd117f/LICENSE).
+[license at the pinned revision](https://github.com/earendil-works/pi/blob/4a080252f06caf63a525d7873c5d94d3c23887e0/LICENSE).
 The upstream standalone distribution embeds Bun 1.3.14 and other dependencies
 with their own terms. Bun's
 [license and third-party notices](https://github.com/oven-sh/bun/blob/bun-v1.3.14/LICENSE.md)
@@ -35,24 +39,24 @@ does not replace those terms.
 
 ## T3 Code installation
 
-Geer setup downloads T3 Code 0.0.44 from the
-[official upstream release](https://github.com/pingdotgg/t3code/releases/tag/v0.0.44)
+Geer setup downloads T3 Code 0.1.2 from the
+[official upstream release](https://github.com/pingdotgg/t3code/releases/tag/v0.1.2)
 when no compatible installation is available. The installer includes only the
 integrity and provenance manifest in `packaging/t3-desktop.json`; setup installs
 the official signed app unchanged.
 
-The manifest pins source revision `451afcb22d93f06cb24f9bc16703404564952553`
+The manifest pins source revision `044f07257c9684ae4543bd1e1ebf9c394e9e3830`
 and the Apple Silicon zip
-[`T3-Code-0.0.44-arm64.zip`](https://github.com/pingdotgg/t3code/releases/download/v0.0.44/T3-Code-0.0.44-arm64.zip).
-The zip is 137,613,348 bytes with SHA-256
-`480b5cd8ebcee4f4f43e108d309d91fe7c879931d8aae8a67b71cfd8a07ce0df`.
+[`T3-Code-0.1.2-arm64.zip`](https://github.com/pingdotgg/t3code/releases/download/v0.1.2/T3-Code-0.1.2-arm64.zip).
+The zip is 152,501,697 bytes with SHA-256
+`c99dbde726b168853c4409f32292b7381db2c83c1aca0ebdd1c506065eac990f`.
 The app's identifier is `com.t3tools.t3code`, signed by T3 Tools, Inc. with Apple
 Developer team ID `ARK85ZXQ4Z`.
 
 T3 Code's original code is MIT licensed, copyright T3 Tools Inc. 2026. Its
-[license at the pinned revision](https://github.com/pingdotgg/t3code/blob/451afcb22d93f06cb24f9bc16703404564952553/LICENSE)
-and [source](https://github.com/pingdotgg/t3code/tree/451afcb22d93f06cb24f9bc16703404564952553)
-remain authoritative. The upstream app bundles Electron 44.4.2, Chromium,
+[license at the pinned revision](https://github.com/pingdotgg/t3code/blob/044f07257c9684ae4543bd1e1ebf9c394e9e3830/LICENSE)
+and [source](https://github.com/pingdotgg/t3code/tree/044f07257c9684ae4543bd1e1ebf9c394e9e3830)
+remain authoritative. The upstream app bundles Electron, Chromium,
 Node.js, and other dependencies with their own terms. The app also includes
 license files for `@clerk/electron-passkeys`, its Darwin arm64 native module,
 `@napi-rs/keyring`, and `node-pty`. Geer preserves these upstream licenses,

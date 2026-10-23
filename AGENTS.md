@@ -6,17 +6,95 @@ this file for implementation guidance.
 
 ## Code map
 
-Geer connects T3 Code's `grok` ACP driver to Pi RPC. Pi uses the local oMLX
-engine for inference and Semble over MCP for repository retrieval.
+Geer connects T3 Code's native `pi` driver directly to Pi RPC. Pi uses the local
+oMLX engine for inference and Semble over MCP for repository retrieval.
 
 - `src/geer/` is the Python package, managed with `uv`.
 - `src/geer/onboarding.py` owns setup and the terminal interface.
   `src/geer/setup_protocol.py` defines the versioned JSON Lines protocol for
   the SwiftUI client in `packaging/macos/GeerSetup/`.
+- `src/geer/pi_native.py` separates native discovery, tool-free background
+  generation, and Full access chats. `geer launch` dispatches `--mode rpc` to
+  it and retains ACP arguments through `src/geer/pi_acp.py` for recovery.
+- `src/geer/models.py` owns the two-family chooser policy. Terminal and native
+  setup consume its catalog and `src/geer/model_benchmarks.py` display metadata.
 - `tools/build_release.py` builds the frozen CLI and macOS installer;
   `tools/build_runtime.py` builds the pinned oMLX runtime.
 - `model-distributions/` pins installation revisions. `model-recipes/` and
   `model-cards/` record conversion provenance and licenses.
+
+For Sage-A1.5 conversion, display name promotion, or publication, read
+[the publication runbook](docs/agents-sage-publication.md).
+
+## Maintainer PKG signing
+
+For maintainer releases on the release Mac, reuse the matching Developer ID
+Application and Developer ID Installer identities already available there.
+Pass them to `tools/build_release.py` with `--application-sign` and
+`--installer-sign`, and reuse `--notary-profile geer-notary`.
+Confirm the existing Keychain profile with the read-only command
+`xcrun notarytool history --keychain-profile geer-notary --output-format json`.
+
+## Model selection goal
+
+Choose the best practical local model and variant for each Mac's chip and
+unified memory. The target covers all M-series configurations with at least
+16 GB, including M1 through M6 and configurations up to 512 GB. Exclude 8 GB
+machines for now. This is a qualification goal; current support still follows
+the implementation and measured evidence.
+
+Budget memory for macOS, T3, Pi, retrieval, inference, and a useful context
+window for sustained agentic, computer-use, and coding tasks. Require at least
+32K total context, including tools, history, images, and generation reserve.
+Loading weights alone does not establish suitability. Preserve image inputs
+in every profile of an image-capable model and verify them through Pi/T3;
+stripping vision to fit a smaller Mac does not meet the model-selection goal.
+
+For model comparison and qualification, follow
+[the evaluation policy](docs/agents-model-evaluation.md). After capability and
+memory checks pass, use 50% reported benchmark quality, 30% verified useful
+context, and 20% measured speed as a provisional ranking. Keep reported
+quality, estimates, and physical-host measurements distinct.
+
+Use the currently shipped model artifact and inference runtime, at their exact
+revisions, as the comparison baseline. Prefer another model or inference server
+when measured results establish a better fit and the compatibility checks in
+CONTRIBUTING.md prove the migration and recovery path. Keep model and runtime
+selection specific to the hardware configuration.
+
+The initial setup/installation chooser supports Sage-A1.5 and Ornith 1.5,
+with Sage recommended. Retain the confirmed choice on upgrades and reinstalls.
+Resolve an explicit family first, then a saved confirmed eligible choice,
+then a verified compatible legacy active model, then the sole verified
+exact-current hardware-compatible cached family. Choose Sage when both or
+neither qualify. Save the choice only after successful activation. Automatic
+reuse requires full verification of the approved artifact and variant;
+candidate directories, stale revisions, and corrupt snapshots do not qualify.
+
+Keep the chooser's 32 GiB minimum and configured caps for both families.
+Mixed 4/8-bit uses 64K below 48 GiB and 128K below 64 GiB; 6-bit uses 256K at
+64 GiB or more. These caps are configuration, not physical qualification.
+Variant aliases must pass the same hardware checks as family selections.
+
+Keep one globally active model. Switch families between turns through the
+existing close/reopen T3 flow and explicit quit consent. Preserve downloads,
+the previous activation, provider identity, and histories. Reusing the same
+verified active artifact is a no-op. Keep runtime family metadata consistent
+with the active artifact, and preserve rollback and the running-T3 guard.
+`model add` only downloads and verifies the other family; it changes neither
+the active model nor the confirmed choice. Initial setup activates the chosen
+family. Explicit CLI `model use` is a maintenance operation with the same quit
+guard. Keep the chooser in installation, not in chat or automatic switching.
+
+## Experiment history
+
+Before model, quantization, runtime, or benchmark work, search
+[the experiment ledger](docs/experiments/README.md) and matching dated records.
+Consult `geer-private/experiments/` when accessible; flag incomplete history
+when it is unavailable. Compare exact artifacts and previous blockers, and
+explain what changed before repeating a trial. Record outcomes and concrete
+revisit conditions. Keep working research private and publish summaries only
+after explicit maintainer review, following the ledger's publication rules.
 
 ## Guardrails
 
@@ -27,11 +105,19 @@ engine for inference and Semble over MCP for repository retrieval.
 - Discover the authenticated loopback endpoint under `~/.geer/state`.
   Keep metadata probes independent of inference startup.
   Keep protocol stdout as JSON Lines and diagnostics on stderr.
-- Advertise the active model's real ID and name through initialize
-  `_meta.modelState`. Require Full access before interactive tools run;
-  keep T3 title/commit-text sessions tool-free.
-- Keep client MCP credentials in private session directories and strip ambient
-  cloud credentials from Pi. Use Pi JSONL history for resumption and complete
+- Advertise the active model through Pi's native model inventory and state,
+  using `geer/<id>` in T3 selections. Retain ACP `_meta.modelState` for legacy
+  clients. Require Full access before interactive tools run; keep native
+  title/commit sessions free of tools, extensions, MCP credentials, and skills.
+- Keep T3's injected native Pi extension and session environment intact for
+  chats. Let T3 and Pi own cancellation, `agent_settled`, and JSONL resumption.
+  Discovery uses `--no-session` without starting inference or MCP.
+- Keep the `piGeer` instance ID through migration and preserve custom provider
+  rows. Grok-backed T3 threads may need explicit Pi resumption after the driver
+  change. Preserve legacy session mappings and JSONL; never rewrite T3's DB.
+- Keep native MCP credentials in the current session environment and legacy
+  ACP credentials in private session directories. Strip ambient cloud
+  credentials from Pi. Use Pi JSONL history for resumption and complete
   turns on `agent_settled` so queued work and compaction finish before replying.
 - Keep Geer's own skills in `~/.geer/skills`. Borrow existing user skill
   directories through Pi's `--skill` paths without copying files or changing

@@ -121,14 +121,54 @@ uv run geer doctor
 uv run geer stats
 ```
 
-T3 integration requires version 0.0.43 or newer. It uses T3's existing ACP
-transport, and interactive Geer chats require Full access. Verify the actual
-Pi process, model label, repository tool use, cancellation, and resumed history
+T3 integration uses the native Pi RPC driver. The supported baseline is
+0.1.1-nightly.20261020.3411, and fresh setup downloads stable 0.1.2. Newer
+compatible apps are reused. Interactive Geer chats require Full access. Verify
+the actual Pi process, model label, repository tool use, cancellation, and resumed history
 in T3; a direct API canary alone does not prove the integration works.
+
+Client ACP MCP servers can use HTTP or stdio. Stdio uses pinned Pi's native
+transport, which expands `~` and leading `~/` in the executable and each
+argument. Use absolute paths when verifying literal argument forwarding.
+ACP environment values remain literal through Pi's config-value escapes,
+including dollar references and leading `!` characters.
 
 Some commands start a large local model and may require substantial memory.
 State the exact checks you could run and do not present an unrun hardware test
 as passing.
+
+### Native Pi migration
+
+Preview the settings transaction with `geer integration add t3 --plan`.
+Quit T3, then apply it with `geer integration add t3`. Setup preserves the
+`piGeer` instance ID, other provider rows, and local custom model definitions.
+It changes the managed driver to `pi` and maps its selections, favorites, and
+model preferences to Pi's `geer/<model-id>` slugs. Title and commit generation
+continue through the same local provider with tools, extensions, and skills
+disabled. Discovery reads local metadata without starting inference or MCP.
+
+The transaction backs up settings, client preferences, and invalidated provider
+caches under `~/.local/state/geer/t3-config`. To roll back, quit T3 and restore
+those files to their original paths. `geer launch agent --always-approve stdio`
+still serves the legacy ACP protocol through the same launcher.
+
+Changing drivers changes T3's continuation group. Existing Grok-backed threads
+may need explicit resumption in a new native Pi thread. Geer preserves the
+legacy `~/.geer/pi/acp/<session-id>/session.json` mappings and their JSONL
+histories. The saved `session_file` is the path needed by Pi RPC's
+`switch_session`, rather than the old ACP session ID. For terminal recovery,
+run `geer pi --session <path>` from the original repository. Pi's `/resume`
+picker also supports native history in its configured session directory.
+T3 owns the new native session binding; setup does not modify T3's database.
+Experiment-specific provider rows require their own reviewed migration.
+
+The native launch contract was inspected at Nightly source
+`d36b7da2485bc889b320a285deea181f637d760a` and stable source
+`044f07257c9684ae4543bd1e1ebf9c394e9e3830`. Keep `--no-session` discovery
+separate from `--no-session --no-extensions --no-tools` background generation.
+Real T3 verification must cover model identity, a repository read/edit/test
+turn, Semble, selected skills, title and commit generation, cancellation,
+resumption after restart, and rejection of interactive modes below Full access.
 
 ### Model Builds
 
@@ -269,7 +309,7 @@ Never commit, upload, or include in an issue or pull request:
 - credentials, tokens, OAuth files, or license data;
 - raw harness request dumps;
 - private prompt, KV, retrieval, or conversation caches;
-- files from `.geer/` or `ai-refs/`;
+- files from `.geer/`;
 - local model caches, candidates, or weights outside the reviewed publication
   workflow;
 - proprietary prompts, tools, skills, workflows, hooks, plugins, or binaries.

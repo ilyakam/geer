@@ -8,7 +8,8 @@ from pathlib import Path
 
 import pytest
 
-from geer.assets import DEFAULT_MODEL_ID, AssetError, Workspace
+from geer.assets import DEFAULT_MODEL_ID as RAW_MODEL_ID
+from geer.assets import AssetError, Workspace
 from geer.t3 import (
     LEGACY_PROVIDER_ID,
     PROVIDER_ID,
@@ -25,6 +26,8 @@ from geer.t3 import (
     t3_settings_path,
     t3_status,
 )
+
+DEFAULT_MODEL_ID = f"geer/{RAW_MODEL_ID}"
 
 
 @pytest.fixture(autouse=True)
@@ -62,10 +65,10 @@ def test_pi_migration_preserves_other_providers_and_moves_legacy_favorite(
     providers = json.loads(settings.read_text())["providerInstances"]
     assert providers["claudeAgent"] == original_other
     assert LEGACY_PROVIDER_ID not in providers
-    assert providers[PROVIDER_ID]["driver"] == "grok"
+    assert providers[PROVIDER_ID]["driver"] == "pi"
     assert providers[PROVIDER_ID]["config"]["customModels"] == []
     assert json.loads(client.read_text())["favorites"] == [
-        {"provider": PROVIDER_ID, "model": "local-id"},
+        {"provider": PROVIDER_ID, "model": "geer/local-id"},
         {"provider": "claudeAgent", "model": "other-model"},
     ]
     assert result["legacy_provider_removed"] is True
@@ -96,7 +99,7 @@ def _workspace_with_launcher(tmp_path: Path) -> Workspace:
     return workspace
 
 
-def test_installed_t3_uses_dedicated_pi_acp_launcher(
+def test_installed_t3_uses_dedicated_pi_launcher(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -159,14 +162,15 @@ def test_configure_t3_is_additive_and_creates_private_backup(
 
     assert settings["providerInstances"]["codex"]["enabled"] is True
     geer = settings["providerInstances"][PROVIDER_ID]
-    assert geer["driver"] == "grok"
+    assert geer["driver"] == "pi"
     assert geer["displayName"] == "Geer"
     assert geer["config"]["binaryPath"] == str(launcher)
     assert geer["config"]["customModels"] == []
     client_settings = json.loads(client_settings_path.read_text())
-    assert settings["providerModelPreferences"] == {
-        "legacy": {"hiddenModels": ["legacy-model"]}
-    }
+    assert settings["providerModelPreferences"]["legacy"] == {"hiddenModels": ["legacy-model"]}
+    synced = settings["providerModelPreferences"][PROVIDER_ID]
+    assert "geer/stale-geer-model" in synced["hiddenModels"]
+    assert synced["modelOrder"] == [DEFAULT_MODEL_ID]
     assert client_settings["providerModelPreferences"]["codex"]["hiddenModels"] == [
         "old-codex"
     ]
@@ -197,8 +201,8 @@ def test_configure_t3_is_additive_and_creates_private_backup(
     assert not cache_path.exists()
     assert result["cache_invalidated"] is True
     assert result["applied"] is True
-    assert result["t3_compatibility_version"] == ">=0.0.43"
-    assert result["t3_tested_version"] == "0.0.44"
+    assert result["t3_compatibility_version"] == ">=0.1.1-nightly.20261020.3411"
+    assert result["t3_tested_version"] == "0.1.1-nightly.20261020.3411"
     assert result["changed"] is True
 
 
@@ -377,7 +381,7 @@ def test_remove_t3_cleans_orphaned_geer_favorites_only(tmp_path: Path) -> None:
     assert json.loads(settings_path.read_text())["providerInstances"] == {"codex": {}}
 
 
-def _t3_app(tmp_path: Path, name: str, version: str = "0.0.44") -> Path:
+def _t3_app(tmp_path: Path, name: str, version: str = "0.1.2") -> Path:
     app = tmp_path / f"{name}.app"
     executable = app / "Contents/MacOS" / name
     executable.parent.mkdir(parents=True)
@@ -402,15 +406,15 @@ def test_t3_settings_and_candidates_follow_current_home(monkeypatch, tmp_path: P
 
 
 def test_find_t3_prefers_running_then_highest_compatible_version(monkeypatch, tmp_path) -> None:
-    stable = _t3_app(tmp_path, "Stable", "0.0.44")
-    nightly = _t3_app(tmp_path, "Nightly", "0.0.44-nightly.20260930.1000")
-    older = _t3_app(tmp_path, "Older", "0.0.43-nightly.20260923.2150")
+    stable = _t3_app(tmp_path, "Stable", "0.1.2")
+    nightly = _t3_app(tmp_path, "Nightly", "0.1.3-nightly.20261022.1")
+    older = _t3_app(tmp_path, "Older", "0.1.1-nightly.20261020.3411")
     unsupported = _t3_app(tmp_path, "Old", "0.0.42")
     monkeypatch.setattr("geer.t3._t3_app_candidates", lambda: (stable, nightly, unsupported))
     monkeypatch.setattr("geer.t3.running_t3_applications", lambda: [older])
-    assert find_t3() == T3Application(True, "0.0.43-nightly.20260923.2150", older, True)
+    assert find_t3() == T3Application(True, "0.1.1-nightly.20261020.3411", older, True)
     monkeypatch.setattr("geer.t3.running_t3_applications", lambda: [])
-    assert find_t3() == T3Application(True, "0.0.44", stable)
+    assert find_t3() == T3Application(True, "0.1.3-nightly.20261022.1", nightly)
 
 
 def test_find_t3_identifies_an_old_app_for_in_place_upgrade(monkeypatch, tmp_path) -> None:
@@ -518,9 +522,9 @@ def test_configure_t3_preserves_existing_selections_and_model_preferences(
     updated_client = json.loads(client.read_text())
     assert updated_client["favorites"] == [favorite]
     preference = updated_client["providerModelPreferences"][PROVIDER_ID]
-    assert "real-model" not in preference["hiddenModels"]
-    assert "user-hidden" in preference["hiddenModels"]
-    assert preference["modelOrder"] == ["real-model", "user-model"]
+    assert "geer/real-model" not in preference["hiddenModels"]
+    assert "geer/user-hidden" in preference["hiddenModels"]
+    assert preference["modelOrder"] == ["geer/real-model", "geer/user-model"]
     assert preference["customPreference"] is True
 
 
@@ -544,10 +548,10 @@ def test_configure_t3_migrates_legacy_and_project_model_selections(monkeypatch, 
     }))
     result = configure_t3(workspace, settings, tmp_path / "backups")
     updated = json.loads(settings.read_text())
-    selection = {"instanceId": PROVIDER_ID, "model": "real-model"}
+    selection = {"instanceId": PROVIDER_ID, "model": "geer/real-model"}
     assert updated["defaultModelSelection"] == selection
     assert updated["textGenerationModelSelection"] == {
-        "instanceId": PROVIDER_ID, "model": "real-model",
+        "instanceId": PROVIDER_ID, "model": "geer/real-model",
     }
     assert updated["projectSettingsOverrides"]["project"] == {
         "defaultModelSelection": selection, "defaultAutoPull": True,
@@ -649,6 +653,115 @@ def test_t3_status_reads_readiness_without_writes_or_inference(monkeypatch, tmp_
     assert documents == {path: (path.read_bytes(), path.stat().st_mtime_ns) for path in documents}
 
 
+@pytest.mark.parametrize("options", [
+    [], {}, {"thinking": "high"}, {" thinking ": " high "},
+    [{"id": " thinking ", "value": " high "}],
+    *([{"id": "thinking", "value": level}] for level in (
+        "off", "minimal", "low", "medium", "high", "xhigh", "max",
+    )),
+])
+@pytest.mark.parametrize("model", ["geer/real-model", "geer/second-local", "default"])
+def test_native_pi_options_survive_status_and_idempotent_setup(
+    monkeypatch, tmp_path, options, model,
+) -> None:
+    workspace, settings, _ = _ready_t3_profile(monkeypatch, tmp_path)
+    document = json.loads(settings.read_text())
+    selection = {"instanceId": PROVIDER_ID, "model": model, "options": options}
+    keys = (
+        "defaultModelSelection", "textGenerationModelSelection",
+        "sourceControlWriterModelSelection", "reviewGuideModelSelection",
+    )
+    document.update({key: selection for key in keys})
+    document["projectSettingsOverrides"] = {"repo": {key: selection for key in keys}}
+    settings.write_text(json.dumps(document))
+    client = settings.with_name("client-settings.json")
+    cache = tmp_path / "caches" / f"{PROVIDER_ID}.json"
+    cache.parent.mkdir()
+    cache.write_text('{"models":["verified-model"]}\n')
+    before = {
+        path: (path.read_bytes(), path.stat().st_mtime_ns) for path in (settings, client, cache)
+    }
+    backup_base = tmp_path / "backups"
+    backups = list(backup_base.iterdir())
+
+    def forbidden():
+        raise AssertionError("native preferences must not require stopping or probing T3")
+
+    monkeypatch.setattr("geer.t3.running_t3_applications", forbidden)
+    for dry_run in (True, False, False):
+        assert t3_status(workspace, settings)["ready"] is True
+        result = configure_t3(workspace, settings, backup_base, dry_run=dry_run)
+        assert result["changed"] is False and result["applied"] is False
+        assert result["selections_migrated"] == 0
+        assert result["backups"] == {} and result["cache_invalidated"] is False
+    assert before == {path: (path.read_bytes(), path.stat().st_mtime_ns) for path in before}
+    assert list(backup_base.iterdir()) == backups
+
+
+@pytest.mark.parametrize("options", [
+    None, "high", [None], [{"id": "thinking"}],
+    {"thinking": True}, {"thinking": "ultra"}, {"reasoningEffort": "high"},
+    [{"id": "thinking", "value": True}],
+    [{"id": "thinking", "value": "ultra"}],
+    [{"id": "reasoningEffort", "value": "high"}],
+    [{"id": "thinking", "value": "high"}, {"id": "unknown", "value": "low"}],
+])
+@pytest.mark.parametrize("project_override", [False, True])
+def test_native_pi_invalid_options_remain_diagnosable(
+    monkeypatch, tmp_path, options, project_override,
+) -> None:
+    workspace, settings, _ = _ready_t3_profile(monkeypatch, tmp_path)
+    document = json.loads(settings.read_text())
+    section = document
+    if project_override:
+        section = {}
+        document["projectSettingsOverrides"] = {"repo": section}
+    section["defaultModelSelection"] = {
+        "instanceId": PROVIDER_ID, "model": "geer/real-model", "options": options,
+    }
+    settings.write_text(json.dumps(document))
+    original = settings.read_bytes()
+    status = t3_status(workspace, settings)
+    assert status["ready"] is False and "native Pi options" in status["error"]
+    for dry_run in (True, False):
+        with pytest.raises(AssetError, match="native Pi options"):
+            configure_t3(workspace, settings, tmp_path / "backups", dry_run=dry_run)
+    assert settings.read_bytes() == original
+
+
+@pytest.mark.parametrize("model", ["real-model", "geer/real-model", "default"])
+def test_grok_driver_migration_clears_obsolete_options_and_is_idempotent(
+    monkeypatch, tmp_path, model,
+) -> None:
+    workspace, settings, _ = _ready_t3_profile(monkeypatch, tmp_path)
+    document = json.loads(settings.read_text())
+    document["providerInstances"][PROVIDER_ID]["driver"] = "grok"
+    legacy = {
+        "instanceId": PROVIDER_ID, "model": model,
+        "options": [{"id": "reasoningEffort", "value": "high"}],
+    }
+    cloud = {"instanceId": "codex", "model": "user-choice", "options": legacy["options"]}
+    document["defaultModelSelection"] = legacy
+    document["sourceControlWriterModelSelection"] = cloud
+    document["projectSettingsOverrides"] = {"repo": {"reviewGuideModelSelection": legacy}}
+    settings.write_text(json.dumps(document))
+    original = settings.read_bytes()
+
+    result = configure_t3(workspace, settings, tmp_path / "backups")
+
+    updated = json.loads(settings.read_text())
+    expected = {
+        "instanceId": PROVIDER_ID, "model": "default" if model == "default" else "geer/real-model",
+    }
+    assert updated["defaultModelSelection"] == expected
+    assert updated["projectSettingsOverrides"]["repo"]["reviewGuideModelSelection"] == expected
+    assert updated["sourceControlWriterModelSelection"] == cloud
+    assert result["selections_migrated"] == 2
+    assert Path(result["backups"]["settings.json"]).read_bytes() == original
+    assert t3_status(workspace, settings)["ready"] is True
+    assert configure_t3(workspace, settings, tmp_path / "backups")["changed"] is False
+
+
 @pytest.mark.parametrize("defect", [
     "missing_app", "disabled", "config_disabled", "enabled_missing",
     "driver", "binary", "launcher", "hidden", "order",
@@ -677,7 +790,7 @@ def test_t3_status_reports_incomplete_required_integration(monkeypatch, tmp_path
     elif defect == "launcher":
         (workspace.root / "bin/geer-pi").chmod(0o644)
     elif defect == "hidden":
-        preference["hiddenModels"].append("real-model")
+        preference["hiddenModels"].append("geer/real-model")
     elif defect == "order":
         preference["modelOrder"] = []
     elif defect == "legacy_provider":
@@ -777,3 +890,113 @@ def test_remove_t3_does_not_create_missing_client_settings(tmp_path) -> None:
     settings.write_text(json.dumps({"providerInstances": {PROVIDER_ID: {"driver": "grok"}}}))
     assert remove_t3(settings, tmp_path / "backups")["removed"] is True
     assert not settings.with_name("client-settings.json").exists()
+
+
+def test_native_migration_preserves_local_models_synced_preferences_and_history(
+    monkeypatch, tmp_path,
+):
+    workspace = _workspace_with_launcher(tmp_path)
+    monkeypatch.setattr("geer.t3.verify_assets", lambda _: {"model_id": "active-local"})
+    settings = tmp_path / "userdata/settings.json"
+    settings.parent.mkdir()
+    trial = {"driver": "grok", "config": {"binaryPath": "/private/geer-trial"}}
+    cloud = {"instanceId": "codex", "model": "user-choice"}
+    local = {"instanceId": PROVIDER_ID, "model": "second-local"}
+    settings.write_text(json.dumps({
+        "providerInstances": {
+            PROVIDER_ID: {
+                "driver": "grok", "accentColor": "blue", "environment": {"EDITOR": "vim"},
+                "config": {
+                    "binaryPath": "/old/geer-pi", "launchArgs": "--thinking off",
+                    "customModels": ["second-local", {"slug": "third-local", "name": "Third"}],
+                },
+            },
+            "geer-trial": trial,
+        },
+        "defaultModelSelection": cloud,
+        "sourceControlWriterModelSelection": local,
+        "reviewGuideModelSelection": local,
+        "projectSettingsOverrides": {"repo": {"reviewGuideModelSelection": local}},
+        "favorites": [{"provider": PROVIDER_ID, "model": "second-local"}],
+        "providerModelPreferences": {PROVIDER_ID: {
+            "hiddenModels": ["third-local"], "modelOrder": ["second-local"],
+        }},
+    }))
+    client = settings.with_name("client-settings.json")
+    client.write_text(json.dumps({
+        "favorites": [{"provider": PROVIDER_ID, "model": "third-local"}],
+    }))
+    history = workspace.runtime / "pi/acp/synthetic/history/conversation.jsonl"
+    history.parent.mkdir(parents=True)
+    history.write_text('{"type":"session"}\n')
+    snapshot = tmp_path / "verified-snapshot"
+    snapshot.mkdir()
+    workspace.models.mkdir()
+    active = workspace.models / "active"
+    active.symlink_to(snapshot)
+
+    result = configure_t3(workspace, settings, tmp_path / "backups")
+
+    updated = json.loads(settings.read_text())
+    provider = updated["providerInstances"][PROVIDER_ID]
+    assert provider["driver"] == "pi" and provider["accentColor"] == "blue"
+    assert provider["environment"] == {"EDITOR": "vim"}
+    assert provider["config"]["launchArgs"] == "--thinking off"
+    assert provider["config"]["customModels"] == [
+        "geer/second-local", {"slug": "geer/third-local", "name": "Third"},
+    ]
+    assert updated["providerInstances"]["geer-trial"] == trial
+    assert updated["defaultModelSelection"] == cloud
+    native_local = {"instanceId": PROVIDER_ID, "model": "geer/second-local"}
+    assert updated["reviewGuideModelSelection"] == native_local
+    assert updated["sourceControlWriterModelSelection"] == native_local
+    assert updated["projectSettingsOverrides"]["repo"]["reviewGuideModelSelection"] == native_local
+    assert updated["favorites"] == [{"provider": PROVIDER_ID, "model": "geer/second-local"}]
+    assert json.loads(client.read_text())["favorites"] == [
+        {"provider": PROVIDER_ID, "model": "geer/third-local"},
+    ]
+    preferences = updated["providerModelPreferences"][PROVIDER_ID]
+    assert "geer/third-local" in preferences["hiddenModels"]
+    assert preferences["modelOrder"] == ["geer/active-local", "geer/second-local"]
+    assert history.read_text() == '{"type":"session"}\n'
+    assert active.is_symlink() and active.resolve() == snapshot
+    assert result["selections_migrated"] == 3
+    assert configure_t3(workspace, settings, tmp_path / "backups")["changed"] is False
+
+
+def test_native_migration_keeps_unmigrated_sync_nulls(monkeypatch, tmp_path):
+    workspace = _workspace_with_launcher(tmp_path)
+    monkeypatch.setattr("geer.t3.verify_assets", lambda _: {"model_id": "active-local"})
+    settings = tmp_path / "userdata/settings.json"
+    settings.parent.mkdir()
+    settings.write_text('{"favorites":null,"providerModelPreferences":null}')
+    configure_t3(workspace, settings, tmp_path / "backups")
+    updated = json.loads(settings.read_text())
+    assert updated["favorites"] is None and updated["providerModelPreferences"] is None
+
+
+def test_remove_native_geer_clears_synced_favorites_and_review_selections(tmp_path):
+    settings = tmp_path / "settings.json"
+    settings.write_text(json.dumps({
+        "favorites": [
+            {"provider": PROVIDER_ID, "model": "geer/local"},
+            {"provider": "codex", "model": "user-choice"},
+        ],
+        "reviewGuideModelSelection": {"instanceId": PROVIDER_ID, "model": "geer/local"},
+    }))
+    result = remove_t3(settings, tmp_path / "backups")
+    updated = json.loads(settings.read_text())
+    assert updated["favorites"] == [{"provider": "codex", "model": "user-choice"}]
+    assert "reviewGuideModelSelection" not in updated
+    assert result["favorites_removed"] == 1 and result["selections_removed"] == 1
+
+
+@pytest.mark.parametrize("version,compatible", [
+    ("0.0.44", False), ("0.1.1-nightly.20261020.3410", False),
+    ("0.1.1-nightly.20261020.3411", True), ("0.1.1", True),
+    ("0.1.2", True), ("0.1.3-nightly.1", True),
+])
+def test_find_t3_checks_full_native_baseline_version(monkeypatch, tmp_path, version, compatible):
+    app = _t3_app(tmp_path, "T3", version)
+    monkeypatch.setattr("geer.t3._t3_app_candidates", lambda: (app,))
+    assert find_t3().found is compatible

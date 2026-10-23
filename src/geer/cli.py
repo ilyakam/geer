@@ -18,6 +18,7 @@ from .hardware import UnsupportedHardwareError
 from .models import (
     install_model,
     list_models,
+    model_plan,
     remove_model,
     require_model_name,
     use_model,
@@ -92,10 +93,11 @@ def parser() -> argparse.ArgumentParser:
     setup_command = commands.add_parser("setup", help="set up Geer on this Mac")
     setup_command.add_argument("--plan", action="store_true")
     setup_command.add_argument("--yes", action="store_true")
+    setup_command.add_argument("--model", metavar="{sage,ornith}", help="choose a model family")
     setup_command.add_argument("--high-performance-download", action="store_true")
     setup_command.add_argument(
         "--frontend",
-        choices=("json-v1",),
+        choices=("json-v2",),
         help=argparse.SUPPRESS,
     )
 
@@ -106,8 +108,9 @@ def parser() -> argparse.ArgumentParser:
     model = commands.add_parser("model", help="manage local models")
     model_commands = model.add_subparsers(dest="model_command", required=True)
     model_commands.add_parser("list", help="list available and installed models")
-    model_add = model_commands.add_parser("add", help="download and install a model")
+    model_add = model_commands.add_parser("add", help="download and verify a model for later use")
     model_add.add_argument("model")
+    model_add.add_argument("--plan", action="store_true")
     model_add.add_argument("--high-performance-download", action="store_true")
     model_use = model_commands.add_parser("use", help="select the active model")
     model_use.add_argument("model")
@@ -256,8 +259,19 @@ def _print_status(result: dict[str, Any]) -> None:
 def _print_models(result: dict[str, Any]) -> None:
     for model in result["models"]:
         marker = "●" if model["active"] else "○"
-        state = "active" if model["active"] else "available"
-        print(f"{marker} {model['name']}  {model['download']}  {state}")
+        labels = [label for key, label in (
+            ("recommended", "Recommended"), ("active", "Current"),
+            ("installed", "Downloaded and verified"),
+        ) if model[key]]
+        print(f"{marker} {model['family']} · {model['display_name']}  {', '.join(labels)}")
+        print(f"  {model['model_variant']} · configured context: {model['context_window_human']}")
+        print(
+            f"  Missing download estimate: {model['download_human']}; "
+            f"additional disk: {model['required_free_human']}; "
+            f"full model footprint: {model['installed_human']}"
+        )
+        if not model["eligible"]:
+            print(f"  Unavailable: {model['reason']}")
 
 
 def _tail(path: Path, lines: int) -> str:
@@ -283,15 +297,16 @@ def main(arguments: list[str] | None = None) -> int:
                 result = runtime_status(workspace, server_endpoint(workspace))
                 _print_status(result)
                 return 0
-            setup(workspace)
+            setup(workspace, choose_family=False)
             return 0
         if options.command == "setup":
             arguments = {
                 "assume_yes": options.yes,
                 "high_performance": options.high_performance_download,
                 "plan_only": options.plan,
+                "family": options.model,
             }
-            if options.frontend == "json-v1":
+            if options.frontend == "json-v2":
                 run_json_setup(
                     lambda frontend: setup(
                         workspace,
@@ -322,17 +337,21 @@ def main(arguments: list[str] | None = None) -> int:
                     return 0
             elif options.model_command == "add":
                 require_model_name(options.model)
-                result = install_model(
-                    workspace,
-                    high_performance=options.high_performance_download,
-                )
+                if options.plan:
+                    result = model_plan(workspace, family=options.model)
+                else:
+                    result = install_model(
+                        workspace,
+                        family=options.model,
+                        activate=False,
+                        high_performance=options.high_performance_download,
+                    )
             elif options.model_command == "use":
                 result = use_model(workspace, options.model)
             elif options.model_command == "remove":
                 if not _confirm_remove(options.model, options.yes):
                     print("Nothing was removed.")
                     return 0
-                stop_server(workspace)
                 result = remove_model(workspace, options.model)
             else:
                 raise AssertionError(options.model_command)
@@ -419,6 +438,10 @@ def main(arguments: list[str] | None = None) -> int:
                 port=options.port,
             )
         elif options.command == "launch":
+            if remaining[:2] == ["--mode", "rpc"]:
+                from .pi_native import launch_native_pi
+
+                launch_native_pi(workspace, remaining, port=options.port)
             from .pi_acp import run_acp
 
             return run_acp(workspace, remaining)

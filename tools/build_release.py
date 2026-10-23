@@ -18,7 +18,7 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 from geer.pi_distribution import pi_distribution_manifest
-from geer.t3_distribution import T3_BUNDLE_NAME, T3_VERSION, t3_distribution_manifest
+from geer.t3_distribution import T3_BUNDLE_NAME, t3_distribution_manifest
 
 ROOT = Path(__file__).resolve().parents[1]
 BUILD = ROOT / "build" / "release"
@@ -307,9 +307,10 @@ def verify_payload(payload: Path) -> None:
             raise BuildError(f"release payload has an unexpected pinned upstream {label} manifest")
     if (payload / APP_ROOT / "runtime/pi").exists():
         raise BuildError("Pi must be downloaded from upstream during setup, not bundled")
-    if any(path.name in ("T3 Code.app", T3_BUNDLE_NAME) for path in payload.rglob("*.app")) or any(
-        payload.rglob(f"T3-Code-{T3_VERSION}-arm64.zip")
-    ):
+    if any(
+        path.name in ("T3 Code.app", "T3 Code (Alpha).app", "T3 Code (Nightly).app", T3_BUNDLE_NAME)
+        for path in payload.rglob("*.app")
+    ) or any(payload.rglob("T3-Code-*-arm64.zip")):
         raise BuildError("T3 Code must be downloaded from upstream during setup, not bundled")
     if (payload / "usr/local/bin/geer-claude").exists():
         raise BuildError("release payload contains the retired Claude launcher")

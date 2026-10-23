@@ -15,7 +15,8 @@ from typing import Any
 
 from .assets import AssetError, Workspace, find_workspace
 from .hardware import memory_bytes
-from .models import install_model, model_plan
+from .model_benchmarks import benchmark_comparison
+from .models import install_model, model_catalog, model_plan
 from .retrieval import retrieval_canary
 from .runtime import (
     bootstrap_pi,
@@ -135,6 +136,61 @@ def confirm(prompt: str, *, default_yes: bool, assume_yes: bool) -> bool:
     return answer in {"y", "yes"}
 
 
+def print_model_choices(catalog: dict[str, Any], comparison: dict[str, Any]) -> None:
+    print("\nChoose a local model. Both families support images.")
+    for number, row in enumerate(catalog["models"], 1):
+        labels = [
+            label for key, label in (
+                ("recommended", "Recommended"),
+                ("active", "Current"),
+                ("installed", "Downloaded and verified"),
+            ) if row[key]
+        ]
+        selected = " [selected]" if row["family"] == catalog["selected"] else ""
+        print(f"  {number}. {row['display_name']}{selected}")
+        if labels:
+            print(f"     {', '.join(labels)}")
+        print(
+            f"     {row['model_variant']} · configured context: {row['context_window_human']}"
+        )
+        print(
+            f"     Missing download estimate: {row['download_human']}; "
+            f"additional disk: {row['required_free_human']}; "
+            f"full model footprint: {row['installed_human']}"
+        )
+        if not row["eligible"]:
+            print(f"     Unavailable: {row['reason']}")
+    print("Context limits depend on available memory.\n")
+    print(comparison["title"])
+    for row in comparison["rows"]:
+        print(f"  {row['label']}: Ornith {row['ornith']} · Sage {row['sage']}")
+        print(f"    {row['description']}")
+    print(comparison["note"])
+    print(f"Methodology: {comparison['methodology']}")
+    print(f"Source: {comparison['source_url']}\n")
+
+
+def choose_model(catalog: dict[str, Any], comparison: dict[str, Any]) -> str | None:
+    if _ACTIVE_FRONTEND is not None:
+        return _ACTIVE_FRONTEND.choose_model(catalog, comparison)
+    if not sys.stdin.isatty():
+        raise SetupError("interactive model selection is required; rerun with `--yes`")
+    rows = catalog["models"]
+    while True:
+        answer = input(
+            f"Model [default: {catalog['selected']}; number or family; q to cancel]: "
+        ).strip().lower()
+        if answer in {"q", "quit", "cancel"}:
+            return None
+        family = answer or catalog["selected"]
+        if answer.isdigit() and 1 <= int(answer) <= len(rows):
+            family = rows[int(answer) - 1]["family"]
+        row = next((item for item in rows if item["family"] == family), None)
+        if row is not None and row["eligible"]:
+            return family
+        print(f"Unavailable: {row['reason']}" if row else "Choose a listed model family.")
+
+
 def print_welcome(
     prerequisites: dict[str, Prerequisite | T3Application],
     plan: dict[str, Any],
@@ -158,9 +214,11 @@ def print_welcome(
             print(f"• T3 Code {item.version} needs an update to {T3_MINIMUM_VERSION} or newer")
         else:
             print(f"• {label} will be installed automatically")
-    print("\nRecommended model:")
+    print("\nSelected model:")
     print(f"  {plan['display_name']}\n")
-    print(f"Model download:         {plan['download_human']}")
+    print(f"Missing download estimate: {plan['download_human']}")
+    if "installed_human" in plan:
+        print(f"Full model footprint:   {plan['installed_human']}")
     print(f"Runtime download:       {plan['runtime_download_human']}")
     print(f"Runtime after install:  {plan['runtime_installed_human']}")
     if "pi_download_human" in plan:
@@ -169,9 +227,11 @@ def print_welcome(
     print(f"T3 Code download:       {plan['t3_download_human']}")
     print(f"T3 Code after install:  {plan['t3_installed_human']}")
     print(f"Temporary setup space:  {plan['temporary_human']}")
-    print(f"Free space required:    {plan['required_free_human']}")
+    print(f"Additional disk required: {plan['required_free_human']}")
+    if "model_variant" in plan:
+        print(f"Model variant:          {plan['model_variant']}")
     if "context_window_human" in plan:
-        print(f"Context window:         {plan['context_window_human']}")
+        print(f"Configured context:     {plan['context_window_human']}")
     if "kv_cache" in plan:
         print(f"KV cache:               {plan['kv_cache']}")
     print("Model and runtimes:     ~/.geer")
@@ -242,30 +302,7 @@ def add_t3_integration(
     if plan_only:
         return preview
     running = running_t3_applications() if preview["changed"] else []
-    if running:
-        print(
-            "\nT3 Code must be closed while its settings are updated.\n"
-            "Save your work before continuing.\n"
-        )
-        if assume_yes:
-            raise SetupError(
-                "Quit T3 Code, then rerun `geer setup --yes`. "
-                "No T3 settings were changed; downloaded files are retained."
-            )
-        if not confirm(
-            "Quit T3 Code and continue?",
-            default_yes=True,
-            assume_yes=False,
-        ):
-            raise SetupError(
-                "T3 Code configuration is required. Quit T3 Code and rerun `geer setup`. "
-                "No T3 settings were changed; downloaded files are retained."
-            )
-        for application in running:
-            _quit_t3(application)
-        print("\n  ✓ Quit T3 Code")
-        if running_t3_applications():
-            raise SetupError("T3 Code is still running; quit it and rerun `geer setup`.")
+    _close_t3_with_consent(running, assume_yes=assume_yes)
     print("\nConfiguring T3 Code")
     result = configure_t3(workspace, settings)
     status = t3_status(workspace, settings)
@@ -276,12 +313,41 @@ def add_t3_integration(
     return {**result, "t3_application_path": status["application_path"]}
 
 
+def _close_t3_with_consent(running: list[Path], *, assume_yes: bool) -> None:
+    if running:
+        print(
+            "\nT3 Code must be closed while Geer changes its model or settings.\n"
+            "Save your work before continuing.\n"
+        )
+        if assume_yes:
+            raise SetupError(
+                "Quit T3 Code, then rerun `geer setup --yes`. "
+                "No T3 settings were changed; model files and histories are retained."
+            )
+        if not confirm(
+            "Quit T3 Code and continue?",
+            default_yes=True,
+            assume_yes=False,
+        ):
+            raise SetupError(
+                "Quit T3 Code and rerun `geer setup` to finish. "
+                "No T3 settings were changed; downloaded files are retained."
+            )
+        for application in running:
+            _quit_t3(application)
+        print("\n  ✓ Quit T3 Code")
+        if running_t3_applications():
+            raise SetupError("T3 Code is still running; quit it and rerun `geer setup`.")
+
+
 def setup(
     workspace: Workspace,
     *,
     assume_yes: bool = False,
     high_performance: bool = False,
     plan_only: bool = False,
+    family: str | None = None,
+    choose_family: bool = True,
     frontend: JsonSetupFrontend | None = None,
 ) -> dict[str, Any]:
     global _ACTIVE_FRONTEND
@@ -293,6 +359,8 @@ def setup(
             assume_yes=assume_yes,
             high_performance=high_performance,
             plan_only=plan_only,
+            family=family,
+            choose_family=choose_family,
         )
     finally:
         _ACTIVE_FRONTEND = previous_frontend
@@ -304,9 +372,35 @@ def _setup(
     assume_yes: bool,
     high_performance: bool,
     plan_only: bool,
+    family: str | None,
+    choose_family: bool,
 ) -> dict[str, Any]:
     total_memory = memory_bytes()
-    plan = model_plan(workspace, total_memory_bytes=total_memory)
+    catalog = model_catalog(workspace, total_memory_bytes=total_memory)
+    if not plan_only and not any(row["eligible"] for row in catalog["models"]):
+        unavailable = next(
+            row for row in catalog["models"] if row["family"] == catalog["selected"]
+        )
+        raise SetupError(unavailable["reason"])
+    comparison = benchmark_comparison()
+    plan = (
+        model_plan(workspace, family=family, total_memory_bytes=total_memory)
+        if family is not None else None
+    )
+    if plan is not None:
+        if not plan_only and not plan["eligible"]:
+            raise SetupError(plan["reason"])
+        catalog = {**catalog, "selected": plan["family"]}
+    print_model_choices(catalog, comparison)
+    ask_family = choose_family or catalog.get("selection_source") != "saved"
+    if family is None and ask_family and not plan_only and not assume_yes:
+        family = choose_model(catalog, comparison)
+        if family is None:
+            return {"status": "cancelled"}
+    # Resolve once before acquisition, then retain that identity through activation.
+    if plan is None:
+        plan = model_plan(workspace, family=family, total_memory_bytes=total_memory)
+    catalog = {**catalog, "selected": plan["family"]}
     initial = prerequisite_snapshot()
     print_welcome(initial, plan, total_memory_bytes=total_memory)
     if _ACTIVE_FRONTEND is not None:
@@ -315,13 +409,20 @@ def _setup(
             plan=plan,
             prerequisites=initial,
             retained_model=plan["reusable_active_model"],
+            catalog=catalog,
+            comparison=comparison,
         )
     if platform.system() != "Darwin" or platform.machine() != "arm64":
         raise SetupError("Geer currently requires an Apple Silicon Mac")
     if plan_only:
-        return {"status": "planned", "plan": plan}
+        return {"status": "planned", "plan": plan, "catalog": catalog, "comparison": comparison}
+    if not plan["eligible"]:
+        raise SetupError(plan["reason"])
     if not confirm("Continue?", default_yes=True, assume_yes=assume_yes):
         return {"status": "cancelled"}
+
+    if plan["active_model_installed"] and plan["activation_changes"]:
+        _close_t3_with_consent(running_t3_applications(), assume_yes=assume_yes)
 
     _write_setup_state(workspace, status="setting_up", t3_configured=False)
     try:
@@ -354,11 +455,11 @@ def _prepare_and_validate(
     print(f"\nPreparing model\n  {plan['display_name']}")
     installed = install_model(
         workspace,
+        family=plan["family"],
         high_performance=high_performance,
         total_memory_bytes=total_memory,
     )
-    activation = installed.get("installed", {}).get("activation", {})
-    if activation.get("reused"):
+    if installed["reused"]:
         print("  ✓ Reused the verified active model")
     else:
         print("  ✓ Downloaded and verified model files")

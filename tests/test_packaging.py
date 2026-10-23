@@ -121,6 +121,20 @@ def test_setup_app_explains_automatic_pi_and_t3_installation() -> None:
     assert "Claude Code" not in source
 
 
+def test_setup_app_has_family_radio_choice_and_visible_quantization_note() -> None:
+    source = (
+        ROOT / "packaging/macos/GeerSetup/Sources/GeerSetupApp/GeerSetupApp.swift"
+    ).read_text()
+    assert '.pickerStyle(.radioGroup)' in source
+    assert 'model.answer(model.selectedFamily)' in source
+    assert 'Missing download estimate:' in source
+    assert 'Full model footprint:' in source
+    assert 'Additional disk required:' in source
+    assert 'Text(comparison.note)' in source
+    assert 'DisclosureGroup("Methodology and source"' in source
+    assert '"json-v2"' in source
+
+
 @pytest.fixture
 def release_builder() -> ModuleType:
     spec = importlib.util.spec_from_file_location(
@@ -191,7 +205,10 @@ def test_release_verification_rejects_missing_or_stale_dependency_pin(
 
 
 @pytest.mark.parametrize(
-    "binary", ["T3 Code.app", "T3 Code (Alpha).app", "T3-Code-0.0.44-arm64.zip"]
+    "binary", [
+        "T3 Code.app", "T3 Code (Alpha).app", "T3 Code (Beta).app", "T3 Code (Nightly).app",
+        "T3-Code-0.0.44-arm64.zip", "T3-Code-0.1.2-arm64.zip",
+    ]
 )
 def test_release_verification_rejects_bundled_t3(
     release_builder: ModuleType, pinned_payload: Path, binary: str

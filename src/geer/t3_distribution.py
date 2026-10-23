@@ -14,19 +14,19 @@ import zipfile
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-T3_VERSION = "0.0.44"
-T3_REVISION = "451afcb22d93f06cb24f9bc16703404564952553"
+T3_VERSION = "0.1.2"
+T3_REVISION = "044f07257c9684ae4543bd1e1ebf9c394e9e3830"
 T3_ARCHIVE_URL = (
     f"https://github.com/pingdotgg/t3code/releases/download/v{T3_VERSION}/"
     f"T3-Code-{T3_VERSION}-arm64.zip"
 )
-T3_ARCHIVE_BYTES = 137_613_348
-T3_ARCHIVE_SHA256 = "480b5cd8ebcee4f4f43e108d309d91fe7c879931d8aae8a67b71cfd8a07ce0df"
+T3_ARCHIVE_BYTES = 152_501_697
+T3_ARCHIVE_SHA256 = "c99dbde726b168853c4409f32292b7381db2c83c1aca0ebdd1c506065eac990f"
 # Regular file bytes, excluding the signed framework symlinks.
-T3_INSTALLED_BYTES = 334_315_639
+T3_INSTALLED_BYTES = 402_260_905
 T3_BUNDLE_ID = "com.t3tools.t3code"
-T3_BUNDLE_NAME = "T3 Code (Alpha).app"
-T3_EXECUTABLE = "T3 Code (Alpha)"
+T3_BUNDLE_NAME = "T3 Code (Beta).app"
+T3_EXECUTABLE = "T3 Code (Beta)"
 T3_TEAM_ID = "ARK85ZXQ4Z"
 T3_SIGNATURE_REQUIREMENT = (
     f'identifier "{T3_BUNDLE_ID}" and anchor apple generic '

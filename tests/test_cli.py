@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from geer import __version__
@@ -55,11 +57,57 @@ def test_uninstall_is_a_public_command() -> None:
 
 
 def test_setup_accepts_hidden_graphical_frontend() -> None:
-    options = parser().parse_args(["setup", "--frontend", "json-v1"])
+    options = parser().parse_args(["setup", "--frontend", "json-v2"])
 
     assert options.command == "setup"
-    assert options.frontend == "json-v1"
+    assert options.frontend == "json-v2"
     assert "--frontend" not in parser().format_help()
+
+
+def test_old_native_protocol_is_rejected_explicitly() -> None:
+    with pytest.raises(SystemExit, match="2"):
+        parser().parse_args(["setup", "--frontend", "json-v1"])
+
+
+@pytest.mark.parametrize("family", ["sage", "ornith"])
+def test_setup_forwards_explicit_family_plan_and_yes(monkeypatch, tmp_path, family) -> None:
+    calls = []
+    monkeypatch.setattr("geer.cli.find_workspace", lambda: Workspace(tmp_path))
+    monkeypatch.setattr("geer.cli.setup", lambda workspace, **kw: calls.append(kw))
+    assert main(["setup", "--model", family, "--plan", "--yes"]) == 0
+    assert calls == [{
+        "family": family, "plan_only": True, "assume_yes": True, "high_performance": False,
+    }]
+
+
+@pytest.mark.parametrize("command", ["add", "install", "setup"])
+@pytest.mark.parametrize("family", ["sage", "ornith"])
+def test_model_add_downloads_without_activation(monkeypatch, tmp_path, command, family) -> None:
+    calls = []
+    monkeypatch.setattr("geer.cli.find_workspace", lambda: Workspace(tmp_path))
+    monkeypatch.setattr("geer.cli.require_model_name", lambda value: None)
+    monkeypatch.setattr("geer.cli.install_model", lambda workspace, **kw: calls.append(kw) or {})
+    assert main(["model", command, family]) == 0
+    assert calls == [{"family": family, "activate": False, "high_performance": False}]
+
+
+def test_model_add_plan_never_installs(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr("geer.cli.find_workspace", lambda: Workspace(tmp_path))
+    monkeypatch.setattr("geer.cli.require_model_name", lambda value: None)
+    monkeypatch.setattr("geer.cli.install_model", lambda *a, **kw: pytest.fail("install"))
+    calls = []
+    monkeypatch.setattr("geer.cli.model_plan", lambda workspace, **kw: calls.append(kw) or {})
+    assert main(["model", "add", "ornith", "--plan"]) == 0
+    assert calls == [{"family": "ornith"}]
+
+
+def test_bare_command_repairs_without_forcing_saved_family_question(monkeypatch, tmp_path) -> None:
+    calls = []
+    monkeypatch.setattr("geer.cli.find_workspace", lambda: Workspace(tmp_path))
+    monkeypatch.setattr("geer.cli.setup_complete", lambda workspace: False)
+    monkeypatch.setattr("geer.cli.setup", lambda workspace, **kw: calls.append(kw))
+    assert main([]) == 0
+    assert calls == [{"choose_family": False}]
 
 
 def test_uninstall_is_last_in_public_help() -> None:
@@ -107,7 +155,7 @@ def test_status_requires_pi_and_t3_even_with_an_online_engine(
                 "version": "0.0.44",
                 **({} if t3_ready else {"error": "T3 Code provider is disabled"}),
             },
-            "pi": {"status": "ready", "version": "0.99.1"}
+            "pi": {"status": "ready", "version": "1.4.0"}
             if pi_ready
             else {
                 "status": "unavailable",
@@ -118,7 +166,7 @@ def test_status_requires_pi_and_t3_even_with_an_online_engine(
     output = capsys.readouterr().out
     if pi_ready and t3_ready:
         assert "Geer is ready" in output
-        assert "Harness    Pi 0.99.1" in output
+        assert "Harness    Pi 1.4.0" in output
         assert "install or repair" not in output
     else:
         assert "Geer is ready" not in output
@@ -133,6 +181,22 @@ def test_status_requires_pi_and_t3_even_with_an_online_engine(
 def test_setup_cannot_skip_required_t3() -> None:
     with pytest.raises(SystemExit, match="2"):
         parser().parse_args(["setup", "--skip-t3"])
+
+
+def test_family_removal_is_forwarded_without_cli_runtime_changes(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    calls = []
+    monkeypatch.setattr("geer.cli.find_workspace", lambda: Workspace(tmp_path))
+    monkeypatch.setattr("geer.cli.stop_server", lambda *a: pytest.fail("stopped server"))
+    monkeypatch.setattr(
+        "geer.cli.remove_model",
+        lambda workspace, family: calls.append(family) or {"removed": family},
+    )
+
+    assert main(["model", "remove", "sage", "--yes"]) == 0
+    assert calls == ["sage"]
 
 
 @pytest.mark.parametrize("ready", [True, False])

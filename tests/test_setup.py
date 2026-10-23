@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import io
 import json
 import sys
 from pathlib import Path
 
 import pytest
+import test_models
 
 from geer.assets import AssetError, Workspace
 from geer.cli import main
@@ -12,6 +14,7 @@ from geer.onboarding import (
     Prerequisite,
     SetupError,
     add_t3_integration,
+    choose_model,
     confirm,
     find_pi,
     prepare_t3,
@@ -22,15 +25,17 @@ from geer.onboarding import (
 from geer.t3 import T3Application
 from geer.t3_distribution import T3DistributionError
 
+model_inventory = test_models.inventory
+
 
 def test_find_pi_uses_verified_distribution(monkeypatch, tmp_path: Path) -> None:
     command = tmp_path / "pi"
     command.touch(mode=0o755)
     monkeypatch.setattr("geer.onboarding.compatible_pi", lambda workspace: str(command))
-    monkeypatch.setattr("geer.onboarding._version", lambda command: "0.99.1")
+    monkeypatch.setattr("geer.onboarding._version", lambda command: "1.4.0")
     result = find_pi()
     assert result.found is True
-    assert result.version == "0.99.1"
+    assert result.version == "1.4.0"
     assert result.path == command
 
 
@@ -97,6 +102,11 @@ def setup_environment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     workspace = Workspace(tmp_path)
     plan = {
         "display_name": "Geer Test Model",
+        "family": "sage",
+        "active": True,
+        "eligible": True,
+        "activation_changes": False,
+        "active_model_installed": True,
         "download_human": "1.0 GiB",
         "runtime_download_human": "300.0 MiB",
         "runtime_installed_human": "1.0 GiB",
@@ -112,6 +122,15 @@ def setup_environment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr("geer.onboarding.platform.machine", lambda: "arm64")
     monkeypatch.setattr("geer.onboarding.memory_bytes", lambda: 128 * 1024**3)
     monkeypatch.setattr("geer.onboarding.model_plan", lambda value, **kwargs: plan)
+    monkeypatch.setattr("geer.onboarding.model_catalog", lambda value, **kwargs: {
+        "selected": "sage",
+        "models": [{
+            "family": "sage", "display_name": "Geer Test Model", "recommended": True,
+            "active": True, "installed": True, "eligible": True, "reason": "",
+            "model_variant": "6bit", "context_window_human": "256K tokens",
+            "download_human": "0 B", "required_free_human": "0 B", "installed_human": "1 GiB",
+        }],
+    })
     monkeypatch.setattr(
         "geer.onboarding.prerequisite_snapshot",
         lambda: {
@@ -126,7 +145,7 @@ def setup_environment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
     def model(*args, **kwargs):
         calls.append("model")
-        return {"installed": {"activation": {"reused": True}}}
+        return {"reused": True}
 
     monkeypatch.setattr("geer.onboarding.install_model", model)
     monkeypatch.setattr("geer.onboarding.retrieval_canary", lambda value: calls.append("retrieval"))
@@ -161,6 +180,93 @@ def test_setup_requires_t3_before_model_and_migrates_after_canary(
     assert "Reused the verified active model" in output
     assert "Full access" in output
     assert "To add T3 Code later" not in output
+
+
+@pytest.mark.parametrize("family", ["sage", "ornith"])
+def test_wizard_settles_with_real_core_activation_and_same_artifact_repair(
+    model_inventory, monkeypatch, family,
+) -> None:
+    from geer import models
+    from geer.setup_protocol import run_json_setup
+
+    # Reuse the core's synthetic artifact fixture, including real integrity,
+    # acquisition, activation, asset/settings writes, and saved-family handling.
+    inventory = model_inventory
+    workspace = inventory.workspace
+    target = inventory.make(family)
+    monkeypatch.setattr("geer.onboarding.platform.system", lambda: "Darwin")
+    monkeypatch.setattr("geer.onboarding.platform.machine", lambda: "arm64")
+    monkeypatch.setattr("geer.onboarding.memory_bytes", lambda: 128 * 1024**3)
+    monkeypatch.setattr("geer.onboarding.prerequisite_snapshot", lambda: {
+        "pi": Prerequisite(False), "t3": T3Application(False),
+    })
+    stages = []
+    for name in (
+        "bootstrap_runtime", "_probe_mlx", "bootstrap_pi", "prepare_t3", "retrieval_canary",
+    ):
+        monkeypatch.setattr(
+            f"geer.onboarding.{name}", lambda *a, stage=name: stages.append(stage),
+        )
+    monkeypatch.setattr("geer.onboarding.start_server", lambda *a: (
+        stages.append("start_server") or {"endpoint": "http://127.0.0.1:8765"}
+    ))
+    monkeypatch.setattr("geer.onboarding.canary", lambda *a: stages.append("canary"))
+    monkeypatch.setattr("geer.onboarding.add_t3_integration", lambda *a, **kw: (
+        stages.append("integration") or {"t3_application_path": "/Applications/T3 Code.app"}
+    ))
+    monkeypatch.setattr(
+        "geer.onboarding.running_t3_applications", lambda: pytest.fail("unexpected quit probe"),
+    )
+
+    def wizard(*, repair=False):
+        output = io.StringIO()
+
+        def operation(frontend):
+            emit = frontend.emit
+
+            def answer(event, **payload):
+                emit(event, **payload)
+                if event in {"model_choice_required", "decision_required"}:
+                    frontend.input = io.StringIO(json.dumps({
+                        "protocol_version": 2, "decision_id": payload["decision_id"],
+                        "choice": family if event == "model_choice_required" else "yes",
+                    }) + "\n")
+
+            frontend.emit = answer
+            return setup(workspace, frontend=frontend, choose_family=not repair)
+
+        result = run_json_setup(
+            operation, input_stream=io.StringIO(), output_stream=output,
+        )
+        events = [json.loads(line) for line in output.getvalue().splitlines()]
+        assert events[-1]["event"] == "completed"
+        assert events[-1]["result"]["status"] == result["status"] == "ready"
+        assert result["t3_configured"] is True
+        assert json.loads(workspace.setup_state.read_text())["status"] == "ready"
+        assert json.loads(models._selection_path(workspace).read_text()) == {
+            "schema_version": 1, "family": family, "confirmed": True,
+        }
+        assert (workspace.models / "active").resolve() == target
+        assert inventory.stopped == []
+        return result, events
+
+    installed, initial_events = wizard()
+    assert installed["installed"]["installed"]["activation"] is None
+    assert installed["installed"]["reused"] is False
+    assert any(event["event"] == "model_choice_required" for event in initial_events)
+    assert stages == [
+        "bootstrap_runtime", "_probe_mlx", "bootstrap_pi", "prepare_t3", "retrieval_canary",
+        "start_server", "canary", "integration",
+    ]
+
+    repaired, repair_events = wizard(repair=True)
+    assert repaired["installed"]["installed"]["activation"] is None
+    assert repaired["installed"]["reused"] is True
+    assert not any(event["event"] == "model_choice_required" for event in repair_events)
+    assert any(
+        "Reused the verified active model" in event.get("message", "")
+        for event in repair_events if event["event"] == "log"
+    )
 
 
 @pytest.mark.parametrize("failure_phase", ["t3", "configure", "canary"])
@@ -202,8 +308,264 @@ def test_plan_and_cancellation_do_not_acquire_or_mark_ready(setup_environment, m
     assert setup(workspace, plan_only=True)["status"] == "planned"
     assert calls == []
     assert not workspace.setup_state.exists()
+    monkeypatch.setattr("geer.onboarding.choose_model", lambda *args, **kwargs: "sage")
     monkeypatch.setattr("geer.onboarding.confirm", lambda *args, **kwargs: False)
     assert setup(workspace)["status"] == "cancelled"
+    assert calls == []
+    assert not workspace.setup_state.exists()
+
+
+@pytest.mark.parametrize("family", ["sage", "ornith"])
+def test_explicit_setup_resolves_family_once_and_preserves_install_identity(
+    setup_environment, monkeypatch, family,
+) -> None:
+    workspace, plan, calls = setup_environment
+    selections = []
+    plan["family"] = family
+
+    def resolve(value, **kwargs):
+        selections.append(kwargs)
+        return plan
+
+    monkeypatch.setattr("geer.onboarding.model_plan", resolve)
+    monkeypatch.setattr("geer.onboarding.choose_model", lambda *a: pytest.fail("chooser"))
+
+    def install(value, **kwargs):
+        assert kwargs["family"] == family
+        return {"reused": True}
+
+    monkeypatch.setattr("geer.onboarding.install_model", install)
+    setup(workspace, family=family, assume_yes=True)
+    assert selections == [{"family": family, "total_memory_bytes": 128 * 1024**3}]
+
+
+def test_noninteractive_setup_defers_default_policy_to_core(setup_environment, monkeypatch) -> None:
+    workspace, plan, calls = setup_environment
+    selected = []
+    monkeypatch.setattr(
+        "geer.onboarding.model_plan", lambda value, **kw: selected.append(kw) or plan,
+    )
+    monkeypatch.setattr("geer.onboarding.choose_model", lambda *a: pytest.fail("chooser"))
+    setup(workspace, assume_yes=True)
+    assert selected[0]["family"] is None
+
+
+def test_model_choice_cancellation_is_before_acquisition(setup_environment, monkeypatch) -> None:
+    workspace, plan, calls = setup_environment
+    monkeypatch.setattr("geer.onboarding.choose_model", lambda *a: None)
+    monkeypatch.setattr("geer.onboarding.model_plan", lambda *a, **kw: pytest.fail("plan"))
+    assert setup(workspace) == {"status": "cancelled"}
+    assert calls == []
+    assert not workspace.setup_state.exists()
+
+
+def test_changed_active_model_never_silently_quits_t3(setup_environment, monkeypatch) -> None:
+    workspace, plan, calls = setup_environment
+    plan.update(active_model_installed=True, active=False, activation_changes=True)
+    monkeypatch.setattr("geer.onboarding.running_t3_applications", lambda: [Path("/T3.app")])
+    monkeypatch.setattr("geer.onboarding._quit_t3", lambda *a: pytest.fail("quit"))
+    with pytest.raises(SetupError, match="Quit T3 Code"):
+        setup(workspace, family="sage", assume_yes=True)
+    assert calls == []
+    assert not workspace.setup_state.exists()
+
+
+def test_model_switch_closes_t3_after_consent_before_downloads(
+    setup_environment, monkeypatch,
+) -> None:
+    workspace, plan, calls = setup_environment
+    plan.update(active_model_installed=True, active=False, activation_changes=True)
+    live = [Path("/T3.app")]
+    monkeypatch.setattr("geer.onboarding.running_t3_applications", lambda: list(live))
+    monkeypatch.setattr("geer.onboarding.confirm", lambda *a, **kw: True)
+
+    def quit_t3(app):
+        calls.append("quit")
+        live.remove(app)
+
+    monkeypatch.setattr("geer.onboarding._quit_t3", quit_t3)
+    setup(workspace, family="sage")
+    assert calls[0:2] == ["quit", "runtime"]
+
+
+def test_same_active_model_does_not_probe_or_quit_t3(setup_environment, monkeypatch) -> None:
+    workspace, plan, calls = setup_environment
+    plan.update(active_model_installed=True, active=True)
+    monkeypatch.setattr(
+        "geer.onboarding.running_t3_applications", lambda: pytest.fail("quit probe"),
+    )
+    setup(workspace, family="sage", assume_yes=True)
+
+
+def test_first_install_keeps_running_t3_until_configuration(setup_environment, monkeypatch) -> None:
+    workspace, plan, calls = setup_environment
+    plan.update(active_model_installed=False, active=False, activation_changes=True)
+    monkeypatch.setattr(
+        "geer.onboarding.running_t3_applications", lambda: pytest.fail("early quit probe"),
+    )
+    setup(workspace, family="sage", assume_yes=True)
+
+
+def test_model_switch_checks_t3_closed_after_consent(setup_environment, monkeypatch) -> None:
+    workspace, plan, calls = setup_environment
+    plan.update(active_model_installed=True, active=False, activation_changes=True)
+    monkeypatch.setattr("geer.onboarding.running_t3_applications", lambda: [Path("/T3.app")])
+    monkeypatch.setattr("geer.onboarding.confirm", lambda *a, **kw: True)
+    monkeypatch.setattr("geer.onboarding._quit_t3", lambda app: None)
+    with pytest.raises(SetupError, match="still running"):
+        setup(workspace, family="sage")
+    assert calls == []
+    assert not workspace.setup_state.exists()
+
+
+def test_ineligible_model_is_visible_but_never_acquired(setup_environment, capsys) -> None:
+    workspace, plan, calls = setup_environment
+    plan.update(eligible=False, reason="This model is not published yet.")
+    assert setup(workspace, plan_only=True)["plan"]["eligible"] is False
+    with pytest.raises(SetupError, match="not published yet"):
+        setup(workspace, family="sage", assume_yes=True)
+    assert "Selected model" in capsys.readouterr().out
+    assert calls == []
+
+
+@pytest.fixture
+def unsupported_setup_environment(tmp_path, monkeypatch):
+    from geer import models
+
+    workspace = Workspace(Path(__file__).resolve().parents[1], tmp_path / "home")
+    # Use the real hardware policy and catalog, without probing installed services.
+    monkeypatch.setattr(models, "_dependency_plan", lambda _: {
+        f"{name}_{field}_bytes": 0
+        for name in ("runtime", "pi", "t3")
+        for field in ("download", "required_free")
+    })
+    monkeypatch.setattr("geer.onboarding.platform.system", lambda: "Darwin")
+    monkeypatch.setattr("geer.onboarding.platform.machine", lambda: "arm64")
+    monkeypatch.setattr("geer.onboarding.prerequisite_snapshot", lambda: {
+        "pi": Prerequisite(False), "t3": T3Application(False),
+    })
+    monkeypatch.setattr("geer.onboarding.choose_model", lambda *a: pytest.fail("model question"))
+    monkeypatch.setattr("geer.onboarding.confirm", lambda *a, **kw: pytest.fail("confirmation"))
+    monkeypatch.setattr(
+        "geer.onboarding._prepare_and_validate", lambda *a: pytest.fail("acquisition"),
+    )
+    monkeypatch.setattr(
+        "geer.onboarding._write_setup_state", lambda *a, **kw: pytest.fail("state write"),
+    )
+    return workspace
+
+
+@pytest.mark.parametrize("memory_gib", [16, 24])
+@pytest.mark.parametrize("family", [None, "sage", "ornith"])
+@pytest.mark.parametrize("native", [False, True])
+def test_unsupported_memory_fails_before_model_question_or_acquisition(
+    unsupported_setup_environment, monkeypatch, memory_gib, family, native,
+) -> None:
+    from geer.setup_protocol import run_json_setup
+
+    workspace = unsupported_setup_environment
+    monkeypatch.setattr("geer.onboarding.memory_bytes", lambda: memory_gib * 1024**3)
+    reason = f"Geer requires at least 32 GB of unified memory; detected {memory_gib} GB"
+    output = io.StringIO()
+    with pytest.raises(SetupError, match=reason):
+        if native:
+            run_json_setup(
+                lambda frontend: setup(workspace, family=family, frontend=frontend),
+                input_stream=io.StringIO(), output_stream=output,
+            )
+        else:
+            setup(workspace, family=family)
+    if native:
+        events = [json.loads(line) for line in output.getvalue().splitlines()]
+        assert [event["event"] for event in events] == ["hello", "failed"]
+        assert events[-1]["message"] == reason
+    assert not workspace.runtime.exists()
+
+
+@pytest.mark.parametrize("memory_gib", [16, 24])
+@pytest.mark.parametrize("family", [None, "sage", "ornith"])
+def test_unsupported_memory_plan_retains_diagnostic_catalog_without_questions(
+    unsupported_setup_environment, monkeypatch, memory_gib, family,
+) -> None:
+    workspace = unsupported_setup_environment
+    monkeypatch.setattr("geer.onboarding.memory_bytes", lambda: memory_gib * 1024**3)
+    result = setup(workspace, family=family, plan_only=True)
+    assert result["status"] == "planned"
+    assert result["plan"]["eligible"] is False
+    assert result["catalog"]["selected"] == (family or "sage")
+    assert len(result["catalog"]["models"]) == 2
+    assert all(row["eligible"] is False for row in result["catalog"]["models"])
+    assert all(row["model_variant"] is None for row in result["catalog"]["models"])
+    assert str(memory_gib) in result["plan"]["reason"]
+    assert not workspace.runtime.exists()
+
+
+@pytest.mark.parametrize("selection_source, explicit_setup, asks", [
+    ("saved", False, False), ("saved", True, True), ("recommended", False, True),
+])
+def test_implicit_repair_reuses_saved_family_without_repeating_chooser(
+    setup_environment, monkeypatch, selection_source, explicit_setup, asks,
+) -> None:
+    from geer import onboarding
+
+    workspace, plan, calls = setup_environment
+    catalog = onboarding.model_catalog(workspace)
+    catalog["selection_source"] = selection_source
+    monkeypatch.setattr("geer.onboarding.model_catalog", lambda *a, **kw: catalog)
+    questions = []
+    monkeypatch.setattr(
+        "geer.onboarding.choose_model", lambda *a: questions.append(True) or "sage",
+    )
+    monkeypatch.setattr("geer.onboarding.confirm", lambda *a, **kw: False)
+    assert setup(workspace, choose_family=explicit_setup)["status"] == "cancelled"
+    assert bool(questions) == asks
+    assert calls == []
+
+
+def test_terminal_choice_rejects_ineligible_family_then_accepts_number(monkeypatch) -> None:
+    monkeypatch.setattr("geer.onboarding.sys.stdin.isatty", lambda: True)
+    answers = iter(["sage", "2"])
+    monkeypatch.setattr("builtins.input", lambda prompt: next(answers))
+    catalog = {"selected": "sage", "models": [
+        {"family": "sage", "eligible": False, "reason": "Unpublished"},
+        {"family": "ornith", "eligible": True},
+    ]}
+    assert choose_model(catalog, {}) == "ornith"
+
+
+def test_native_setup_choice_resolves_before_download_and_confirmation(
+    setup_environment, monkeypatch,
+) -> None:
+    from geer import onboarding
+    from geer.setup_protocol import JsonSetupFrontend
+
+    workspace, plan, calls = setup_environment
+    plan["family"] = "ornith"
+    catalog = onboarding.model_catalog(workspace)
+    catalog["models"].append({**catalog["models"][0], "family": "ornith"})
+    monkeypatch.setattr("geer.onboarding.model_catalog", lambda *a, **kw: catalog)
+    selections = []
+    monkeypatch.setattr(
+        "geer.onboarding.model_plan", lambda value, **kw: selections.append(kw) or plan,
+    )
+    output = io.StringIO()
+    frontend = JsonSetupFrontend(io.StringIO(), output)
+    emit = frontend.emit
+
+    def answer(event, **payload):
+        emit(event, **payload)
+        if event in {"model_choice_required", "decision_required"}:
+            frontend.input = io.StringIO(json.dumps({
+                "protocol_version": 2, "decision_id": payload["decision_id"],
+                "choice": "ornith" if event == "model_choice_required" else "no",
+            }) + "\n")
+
+    frontend.emit = answer
+    assert setup(workspace, frontend=frontend)["status"] == "cancelled"
+    assert selections[0]["family"] == "ornith"
+    events = [json.loads(line)["event"] for line in output.getvalue().splitlines()]
+    assert events.index("model_choice_required") < events.index("plan")
+    assert events.index("plan") < events.index("decision_required")
     assert calls == []
     assert not workspace.setup_state.exists()
 
@@ -289,7 +651,7 @@ def test_real_distribution_error_is_reported_and_marks_setup_failed(
 @pytest.fixture
 def integration_environment(tmp_path: Path, monkeypatch):
     app = tmp_path / "T3 Code.app"
-    monkeypatch.setattr("geer.onboarding.find_pi", lambda: Prerequisite(True, "0.99.1"))
+    monkeypatch.setattr("geer.onboarding.find_pi", lambda: Prerequisite(True, "1.4.0"))
     monkeypatch.setattr("geer.onboarding.find_t3", lambda: T3Application(True, "0.0.44", app))
     monkeypatch.setattr(
         "geer.onboarding.t3_settings_path", lambda: tmp_path / ".t3/userdata/settings.json"

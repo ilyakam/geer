@@ -10,15 +10,15 @@ import urllib.request
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-PI_VERSION = "0.99.1"
-PI_REVISION = "d86654abb8862e201933517d6f1fce9f88dd117f"
+PI_VERSION = "1.4.0"
+PI_REVISION = "4a080252f06caf63a525d7873c5d94d3c23887e0"
 PI_ARCHIVE_URL = (
     f"https://github.com/earendil-works/pi/releases/download/v{PI_VERSION}/"
     "pi-darwin-arm64.tar.gz"
 )
-PI_ARCHIVE_BYTES = 31_069_587
-PI_ARCHIVE_SHA256 = "4692aba1dcd48219b61edb4ecebc3c33f6199ebe65299228fce5ba69c31a23a6"
-PI_EXTRACTED_BYTES = 84_421_159
+PI_ARCHIVE_BYTES = 31_098_931
+PI_ARCHIVE_SHA256 = "79d9979d76a2a5adb7c28e27e9b44629928ccd0dc9fbb6ae7217860bd5e8be5d"
+PI_EXTRACTED_BYTES = 84_513_829
 PI_SOURCE_URL = (
     f"https://github.com/earendil-works/pi/releases/download/v{PI_VERSION}/"
     f"pi-{PI_VERSION}-source.tar.gz"
@@ -27,31 +27,28 @@ PI_LICENSE_URL = f"https://github.com/earendil-works/pi/blob/{PI_REVISION}/LICEN
 PI_BUN_VERSION = "1.3.14"
 PI_BUN_LICENSE_URL = f"https://github.com/oven-sh/bun/blob/bun-v{PI_BUN_VERSION}/LICENSE.md"
 PI_FILE_HASHES = {
-    "pi": "aceda3ee52b624a3c695de494b2bd7a24bf59b5a2e0ac5839e7eb80344636a23",
-    "package.json": "c701ddbf28b5170deb478b8586ee713f9372027c04736946a4ffe82168ece5ba",
+    "pi": "b4d93b78e542ca8d1792242cf6c1a875ef4e6fb644141fb4cf67ec7c81ef9b14",
+    "package.json": "df6883685382d6a914e5797232744c26579fe7db5576ea0e9c859d018ca2d54e",
     "photon_rs_bg.wasm": "10468181565c56004c867f3a4af96f89a0ef5a63a72f2b5fb12c1f1992a3615c",
     "native/darwin/prebuilds/darwin-arm64/darwin-platform.node": (
         "36e909adf35c2734a2a52b3d65b7dbfb83f2278f306d51b7e32c5045516dfb7f"
     ),
-    "theme/dark.json": "c11a588b714d35300293079b425fb09a3693d4b2d453585d211b08163c648b75",
-    "theme/light.json": "f590c51c2bc8b238891efd0e983473ed2e2a6487b6692cc1d4b2845165e703f7",
-    "theme/theme-schema.json": (
-        "8787918132dbf7aaee1be2ab30ee6306c715dad609cd85e448df595bb02e2a56"
-    ),
+    "theme/dark.json": "e1f96982f8cb7d2a48eca7db03c9cb282cb1e14a243680cd855638ecd6a251b6",
+    "theme/light.json": "2dee6a4be7f765e7fd7728166b7ebf8c29e4ce313f8ec6b38ae50699e3abc2f3",
     "assets/clankolas.png": (
         "169acd0dfe6fbb8d8742ed24a3fc654fd0b2e2d4223c733249c5493723f1b72d"
     ),
     "export-html/template.html": (
-        "916782b1184a9597527605ad751e2b3af30fcea23ba2194002969cd217a06881"
+        "47d208235b066c856dae69c60281a3b99d164b99be9b81153d880375c9327105"
     ),
     "export-html/template.css": (
         "8ee19851f8e583277ed396cbb76496687aa556707fdfc1f78d1118bff87c740a"
     ),
     "export-html/template.js": (
-        "b5bbffdf5d9ec8bb519df45c7ff953ac1969af80e8aba33331b9f87983f91fa5"
+        "946bd9e3e8255c1ebb40f806def18007aa9397816291a7bf2ac0e4e99cec07a4"
     ),
     "export-html/vendor/marked.min.js": (
-        "d5487edc7258b404bfa74c393d74a6393155f02517bd5e7e77cd64f8187f39a0"
+        "438eedfcf932a414d0d0bfeea32dc365c063563b8ca713b4687fc8f8b501e5e4"
     ),
     "export-html/vendor/highlight.min.js": (
         "837a6fa5b0c736b52bbde2b2b6190f305da3fc9ed41681db5321507057b5c846"
