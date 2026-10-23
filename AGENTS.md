@@ -16,6 +16,8 @@ oMLX engine for inference and Semble over MCP for repository retrieval.
 - `src/geer/pi_native.py` separates native discovery, tool-free background
   generation, and Full access chats. `geer launch` dispatches `--mode rpc` to
   it and retains ACP arguments through `src/geer/pi_acp.py` for recovery.
+- `src/geer/models.py` owns the two-family chooser policy. Terminal and native
+  setup consume its catalog and `src/geer/model_benchmarks.py` display metadata.
 - `tools/build_release.py` builds the frozen CLI and macOS installer;
   `tools/build_runtime.py` builds the pinned oMLX runtime.
 - `model-distributions/` pins installation revisions. `model-recipes/` and
@@ -54,10 +56,35 @@ memory checks pass, use 50% reported benchmark quality, 30% verified useful
 context, and 20% measured speed as a provisional ranking. Keep reported
 quality, estimates, and physical-host measurements distinct.
 
-Use oMLX and Ornith as the current comparison baseline. Prefer another model
-or inference server when measured results establish a better fit and the
-compatibility checks in CONTRIBUTING.md prove the migration and recovery path.
-Keep model and runtime selection specific to the hardware configuration.
+Use the currently shipped model artifact and inference runtime, at their exact
+revisions, as the comparison baseline. Prefer another model or inference server
+when measured results establish a better fit and the compatibility checks in
+CONTRIBUTING.md prove the migration and recovery path. Keep model and runtime
+selection specific to the hardware configuration.
+
+The initial setup/installation chooser supports Sage-A1.5 and Ornith 1.5,
+with Sage recommended. Retain the confirmed choice on upgrades and reinstalls.
+Resolve an explicit family first, then a saved confirmed eligible choice,
+then a verified compatible legacy active model, then the sole verified
+exact-current hardware-compatible cached family. Choose Sage when both or
+neither qualify. Save the choice only after successful activation. Automatic
+reuse requires full verification of the approved artifact and variant;
+candidate directories, stale revisions, and corrupt snapshots do not qualify.
+
+Keep the chooser's 32 GiB minimum and configured caps for both families.
+Mixed 4/8-bit uses 64K below 48 GiB and 128K below 64 GiB; 6-bit uses 256K at
+64 GiB or more. These caps are configuration, not physical qualification.
+Variant aliases must pass the same hardware checks as family selections.
+
+Keep one globally active model. Switch families between turns through the
+existing close/reopen T3 flow and explicit quit consent. Preserve downloads,
+the previous activation, provider identity, and histories. Reusing the same
+verified active artifact is a no-op. Keep runtime family metadata consistent
+with the active artifact, and preserve rollback and the running-T3 guard.
+`model add` only downloads and verifies the other family; it changes neither
+the active model nor the confirmed choice. Initial setup activates the chosen
+family. Explicit CLI `model use` is a maintenance operation with the same quit
+guard. Keep the chooser in installation, not in chat or automatic switching.
 
 ## Experiment history
 

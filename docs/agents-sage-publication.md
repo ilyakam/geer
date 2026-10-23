@@ -1,10 +1,11 @@
 # Sage-A1.5 conversion and publication
 
-This runbook covers two independent Sage-A1.5 conversions under issue [#9][issue].
-Both artifacts have been built and passed full output verification. The recipes
-name their Hugging Face destinations but omit distribution revisions and
-installation entries. Keep the current model defaults, selectors, active link,
-and live runtime settings unchanged.
+This runbook covers the independent 6-bit and mixed 4/8-bit Sage-A1.5
+conversions under issue [#9][issue]. Publication supplies verified immutable
+artifacts for the two-family chooser under [#21][chooser-issue]. Keep candidate
+preparation, remote publication, distribution pins, and user activation as
+separate stages. Publication commands leave the active link and live runtime
+settings unchanged.
 
 Read the experiment ledger and the accessible private Sage records before
 resuming. Keep raw evidence and unreviewed experiment findings private under
@@ -25,8 +26,8 @@ quantization. A 6-bit result cannot qualify the mixed artifact.
 
 Limit the current qualification target to a physical M4 Max with 128 GiB.
 Treat 32K useful context and 64K capacity as separate acceptance claims.
-Native source context metadata does not qualify 128K or 262K. Root must review
-artifact-specific T3/Pi image evidence and the pending full computer-use task;
+Native source context metadata does not qualify 128K or 256K. Root must review
+artifact-specific T3/Pi image and computer-use evidence before acceptance;
 tensor retention alone does not prove image serving or computer-use behavior.
 Record completed results for each exact artifact before upload. Keep pending
 checks marked incomplete and publish technical results only after maintainer
@@ -76,10 +77,10 @@ candidate="${GEER_HOME:-$HOME/.geer}/models/candidates/sage-a1.5-35b-$quant"
 
 ### Promote an existing candidate's display label
 
-Both existing candidates have a `candidate` display label in their original
-build metadata. The checked-in recipes now use their final release labels.
-This is a metadata-only promotion of the existing conversions. Root performs
-it separately for each artifact before `prepare-publication`.
+When a reused candidate still has a `candidate` display label in its build
+metadata, promote it to the checked-in recipe's final release label before
+`prepare-publication`. This changes metadata only. Root performs the promotion
+separately for each artifact that needs it.
 
 1. Run full `verify` with the original build recipe and its original display
    label. Archive that recipe, the build manifest, and all existing publication
@@ -131,7 +132,7 @@ uv run --script tools/model_build.py --recipe "$recipe" publish-plan
 
 Review the complete source/build manifests and copied metadata. Require the
 expected quantization policy, all native visual tensors, and no MTP tensors.
-For either reused build, compare against the archived original. All weight
+For a reused build, compare against the archived original. All weight
 hashes and non-publication file records must remain identical. Source manifest
 file records and all build-manifest fields other than `display_name`, `files`,
 and aggregate `bytes` must also remain identical. Only the reviewed publication
@@ -148,8 +149,9 @@ uv run --script tools/model_build.py --recipe "$recipe" publish --confirm-repo-i
 
 The tool requires a write token for the destination namespace, creates or
 reuses a private model repository, and refuses an already-public destination.
-Save its returned immutable `revision`. The recipes deliberately omit this
-value until an actual artifact exists.
+Save its returned immutable `revision`. Use that real revision for verification
+and distribution metadata. Never predict a pin from a local candidate or an
+upload that has not finished.
 
 To verify that revision without changing a checked-in recipe, create a
 private scratch copy. Set `uploaded_revision` to the exact SHA returned by
@@ -200,9 +202,22 @@ required. Stop on any mismatch. Retain the revision, tag, verification output,
 and final manifest hash. A partial release failure requires inspecting the
 actual remote state before retrying.
 
-Only after public verification should a follow-up replace the unpinned inline
-distribution tables with reviewed `model-distributions/` manifests containing
-the real revision and final bytes. Default/model-selector changes require
-their own reviewed integration change and qualified host scope.
+Only after public verification should the coordinator add or update the
+reviewed `model-distributions/` manifest with the real revision and final
+bytes. Verify each artifact independently, including its tag. An unfinished
+6-bit upload cannot supply a pin, and a verified mixed artifact cannot stand
+in for it. Inspect the remote state before resuming an interrupted publication;
+use `verify-published` for an already released revision.
+
+Chooser integration under [#21][chooser-issue] consumes these approved pins.
+It keeps both Sage and Ornith as maintained alternatives and retains the
+hardware rules and image inputs in every profile. The configured memory-tier
+caps do not qualify untested physical hosts. Candidate folders never count as
+verified installed choices. The initial setup wizard activates the selected
+published artifact and persists the choice for upgrades and reinstalls.
+`model add` only downloads and verifies. A deliberate CLI `model use` requires
+the close/reopen T3 flow and preserves downloads, histories, and rollback.
+This runbook does not authorize live activation.
 
 [issue]: https://github.com/ilyakam/geer/issues/9
+[chooser-issue]: https://github.com/ilyakam/geer/issues/21

@@ -30,9 +30,3 @@ group_size = 64
 [output]
 expected_architecture = "qwen3_5_moe"
 preserve_multimodal = true
-
-# Add an immutable revision after private upload and verification.
-[distribution]
-repo_id = "ilyakam/Geer-Sage-A1.5-35B-A3B-4-8bit-MLX"
-tag = "v1"
-model_card_dir = "../model-cards/sage-a1.5-35b-4-8bit"

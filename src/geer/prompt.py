@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-DEFAULT_MODEL_NAME = (
-    "Ornith-1.5-35B-A3B"
-)
+DEFAULT_MODEL_NAME = "the active local model"
 DEFAULT_INTERFACE = "T3 Code"
 DEFAULT_HARNESS = "Pi"
 

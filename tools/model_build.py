@@ -19,6 +19,7 @@ import hashlib
 import importlib.metadata
 import json
 import os
+import re
 import shutil
 import sys
 import tomllib
@@ -27,7 +28,7 @@ from pathlib import Path
 from typing import Any
 
 BUILD_MANIFEST = "geer-build-manifest.json"
-DEFAULT_RECIPE = Path(__file__).resolve().parents[1] / "model-recipes" / "ornith-1.5-35b-6bit.toml"
+DEFAULT_RECIPE = Path(__file__).resolve().parents[1] / "model-recipes" / "sage-a1.5-35b-6bit.toml"
 SAFETY_MARGIN_BYTES = 10 * 1024**3
 MAX_SAFETENSORS_HEADER_BYTES = 100 * 1024**2
 ROUTED_EXPERTS_4BIT_PROTECTED_TEXT_8BIT = "routed_experts_4bit_protected_text_8bit"
@@ -599,11 +600,18 @@ def convert_model(recipe: Recipe, source: Path, output_dir: Path) -> Path:
     return output_dir
 
 
-def verify_output(recipe: Recipe, output_dir: Path) -> dict[str, Any]:
-    manifest_path = output_dir / BUILD_MANIFEST
-    if not manifest_path.is_file():
-        raise BuildError(f"build manifest is missing: {manifest_path}")
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+def _json_object(path: Path, description: str) -> dict[str, Any]:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        raise BuildError(f"cannot read valid {description}: {path}") from error
+    if not isinstance(value, dict):
+        raise BuildError(f"{description} must be a JSON object")
+    return value
+
+
+def _build_manifest(recipe: Recipe, path: Path) -> dict[str, Any]:
+    manifest = _json_object(path, "build manifest")
     if manifest.get("recipe") != recipe.identifier:
         raise BuildError("build manifest recipe does not match")
     if manifest.get("display_name") != recipe.data["display_name"]:
@@ -616,16 +624,78 @@ def verify_output(recipe: Recipe, output_dir: Path) -> dict[str, Any]:
             raise BuildError(f"build manifest source {key} does not match")
     if manifest.get("quantization") != recipe.quantization:
         raise BuildError("build manifest quantization does not match")
+    records = manifest.get("files")
+    if not isinstance(records, list) or not records:
+        raise BuildError("build manifest files must be a non-empty list")
+    seen = set()
+    for record in records:
+        if not isinstance(record, dict):
+            raise BuildError("build manifest file record must be an object")
+        relative = record.get("path")
+        if (
+            not isinstance(relative, str)
+            or not relative
+            or Path(relative).is_absolute()
+            or ".." in Path(relative).parts
+            or "\\" in relative
+            or Path(relative).as_posix() != relative
+            or relative in {".", BUILD_MANIFEST, ".gitattributes"}
+            or relative.startswith(".cache/")
+            or relative in seen
+        ):
+            raise BuildError("build manifest contains an unsafe or duplicate file path")
+        seen.add(relative)
+        if type(record.get("bytes")) is not int or record["bytes"] < 0:
+            raise BuildError("build manifest file size must be a non-negative integer")
+        digest = record.get("sha256")
+        if not isinstance(digest, str) or re.fullmatch(r"[0-9a-f]{64}", digest) is None:
+            raise BuildError("build manifest file hash must be SHA-256")
+    if type(manifest.get("bytes")) is not int or manifest["bytes"] != sum(
+        record["bytes"] for record in records
+    ):
+        raise BuildError("build manifest byte count does not match its file records")
+    return manifest
+
+
+def verify_output(recipe: Recipe, output_dir: Path) -> dict[str, Any]:
+    manifest = _build_manifest(recipe, output_dir / BUILD_MANIFEST)
 
     config_path = output_dir / "config.json"
     index_path = output_dir / "model.safetensors.index.json"
     if not config_path.is_file() or not index_path.is_file():
         raise BuildError("converted config or weight index is missing")
 
-    config = json.loads(config_path.read_text(encoding="utf-8"))
+    config = _json_object(config_path, "converted config")
     if config.get("model_type") != recipe.output["expected_architecture"]:
         raise BuildError(f"unexpected model type: {config.get('model_type')}")
-    verify_quantization_layout(recipe, config)
+    try:
+        verify_quantization_layout(recipe, config)
+    except (ValueError, TypeError) as error:
+        raise BuildError("converted config quantization metadata is invalid") from error
+    index = _json_object(index_path, "converted weight index")
+    weight_map = index.get("weight_map")
+    if (
+        not isinstance(weight_map, dict)
+        or not weight_map
+        or not all(
+            isinstance(name, str) and isinstance(shard, str) for name, shard in weight_map.items()
+        )
+    ):
+        raise BuildError("converted weight index must contain a non-empty weight_map")
+    declared_files = {record["path"] for record in manifest["files"]}
+    if not set(weight_map.values()).issubset(declared_files):
+        raise BuildError("converted weight index references an undeclared shard")
+    if recipe.output.get("preserve_multimodal"):
+        vision = config.get("vision_config")
+        if (
+            not isinstance(vision, dict)
+            or not vision
+            or not any(
+                name.startswith(("vision_tower.", "visual.", "model.visual."))
+                for name in weight_map
+            )
+        ):
+            raise BuildError("converted model is missing native image inputs or vision tensors")
 
     expected_files = {record["path"]: record for record in manifest["files"]}
     actual_files = {
@@ -643,7 +713,7 @@ def verify_output(recipe: Recipe, output_dir: Path) -> dict[str, Any]:
             raise BuildError(f"converted file is missing: {relative}")
         if path.stat().st_size != record["bytes"]:
             raise BuildError(f"converted file size changed: {relative}")
-        if sha256_file(path) != record["sha256"]:
+        if actual_files[relative]["sha256"] != record["sha256"]:
             raise BuildError(f"converted file hash changed: {relative}")
 
     return {
@@ -745,7 +815,7 @@ def publish_private(
 
 def distribution_revision(recipe: Recipe) -> str:
     revision = recipe.distribution.get("revision")
-    if not isinstance(revision, str) or len(revision) != 40:
+    if not isinstance(revision, str) or re.fullmatch(r"[0-9a-f]{40}", revision) is None:
         raise BuildError("recipe does not contain a pinned distribution revision")
     return revision
 
@@ -851,6 +921,25 @@ def release_published(
     return released
 
 
+def _valid_cached_payloads(recipe: Recipe, snapshot: Path) -> bool:
+    """Check the present subset without requiring unfinished files to exist."""
+    try:
+        if snapshot.is_symlink():
+            return False
+        manifest = _build_manifest(recipe, snapshot / BUILD_MANIFEST)
+        for record in manifest["files"]:
+            path = snapshot / record["path"]
+            if (path.exists() or path.is_symlink()) and not path.is_file():
+                return False
+            if path.is_file() and (
+                path.stat().st_size != record["bytes"] or sha256_file(path) != record["sha256"]
+            ):
+                return False
+        return True
+    except (BuildError, OSError):
+        return False
+
+
 def published_install_plan(recipe: Recipe, cache_dir: Path) -> dict[str, Any]:
     repo_id = str(recipe.distribution["repo_id"])
     revision = distribution_revision(recipe)
@@ -866,12 +955,29 @@ def published_install_plan(recipe: Recipe, cache_dir: Path) -> dict[str, Any]:
     except Exception as error:
         raise BuildError(f"cannot plan published model download: {error}") from error
     download_bytes = sum(item.file_size for item in files if item.will_download)
+    estimated = False
+    snapshot = published_snapshot_path(recipe, cache_dir)
+    if download_bytes == 0:
+        try:
+            verify_published_snapshot(recipe, snapshot, cache_dir)
+        except (BuildError, OSError):
+            estimated = True
+    elif snapshot.is_dir() and not _valid_cached_payloads(recipe, snapshot):
+        estimated = True
+    if estimated:
+        # Hub presence checks miss corrupt payloads even in a partial cache.
+        # Reserve the full artifact when present files need or may need repair.
+        download_bytes = max(
+            sum(item.file_size for item in files),
+            int(recipe.distribution.get("expected_bytes", 0)),
+        )
     required_free_bytes = download_bytes + SAFETY_MARGIN_BYTES
     return {
         "repo_id": repo_id,
         "revision": revision,
         "download_bytes": download_bytes,
         "download_human": human_bytes(download_bytes),
+        "download_estimated": estimated,
         "required_free_bytes": required_free_bytes,
         "required_free_human": human_bytes(required_free_bytes),
         "installed_bytes": sum(item.file_size for item in files),
@@ -882,8 +988,81 @@ def published_install_plan(recipe: Recipe, cache_dir: Path) -> dict[str, Any]:
     }
 
 
-def activate_snapshot(snapshot: Path) -> dict[str, Any]:
-    models = geer_home() / "models"
+def published_snapshot_path(recipe: Recipe, cache_dir: Path) -> Path:
+    repo_id = str(recipe.distribution["repo_id"])
+    if re.fullmatch(r"[\w.-]+/[\w.-]+", repo_id) is None:
+        raise BuildError("invalid distribution repository ID")
+    return (
+        cache_dir
+        / f"models--{repo_id.replace('/', '--')}"
+        / "snapshots"
+        / (distribution_revision(recipe))
+    )
+
+
+def verify_published_snapshot(
+    recipe: Recipe,
+    snapshot: Path,
+    cache_dir: Path,
+) -> dict[str, Any]:
+    expected = published_snapshot_path(recipe, cache_dir)
+    if expected.is_symlink() or snapshot.resolve() != expected.resolve():
+        raise BuildError("model is not the exact approved cache snapshot")
+    return verify_output(recipe, expected)
+
+
+def _repair_published_snapshot(recipe: Recipe, snapshot: Path, cache_dir: Path) -> dict[str, Any]:
+    expected = published_snapshot_path(recipe, cache_dir)
+    if expected.is_symlink() or snapshot.resolve() != expected.resolve():
+        raise BuildError("refusing to repair outside the exact approved cache snapshot")
+    from huggingface_hub import hf_hub_download
+
+    arguments = {
+        "repo_id": str(recipe.distribution["repo_id"]),
+        "revision": distribution_revision(recipe),
+        "cache_dir": cache_dir,
+        "force_download": True,
+    }
+    try:
+        manifest_path = Path(hf_hub_download(filename=BUILD_MANIFEST, **arguments))
+        if manifest_path.resolve() != (expected / BUILD_MANIFEST).resolve():
+            raise BuildError("downloaded build manifest is outside the approved snapshot")
+        manifest = _build_manifest(recipe, manifest_path)
+        declared = {record["path"] for record in manifest["files"]}
+        unexpected = {
+            path.relative_to(expected).as_posix()
+            for path in expected.rglob("*")
+            if path.is_file()
+            and path.name not in {BUILD_MANIFEST, ".gitattributes"}
+            and not path.relative_to(expected).as_posix().startswith(".cache/")
+        } - declared
+        if unexpected:
+            raise BuildError(
+                "approved model cache contains unexpected files; preserve it, "
+                "review those files, and retry `geer model add` after moving them aside"
+            )
+        for record in manifest["files"]:
+            local = expected / record["path"]
+            if not local.parent.resolve().is_relative_to(expected.resolve()):
+                raise BuildError("model cache contains an unsafe parent directory link")
+            if (
+                not local.is_file()
+                or local.stat().st_size != record["bytes"]
+                or sha256_file(local) != record["sha256"]
+            ):
+                hf_hub_download(filename=record["path"], **arguments)
+        return verify_published_snapshot(recipe, expected, cache_dir)
+    except BuildError:
+        raise
+    except Exception as error:
+        raise BuildError(
+            "cannot repair the approved model cache; preserve it and retry "
+            "`geer model add` with network access"
+        ) from error
+
+
+def activate_snapshot(snapshot: Path, *, home: Path | None = None) -> dict[str, Any]:
+    models = (home or geer_home()) / "models"
     ensure_private_dir(models)
     active = models / "active"
     previous = models / "previous"
@@ -894,7 +1073,15 @@ def activate_snapshot(snapshot: Path) -> dict[str, Any]:
 
     old_target: str | None = None
     if active.is_symlink():
-        old_target = str(active.resolve(strict=True))
+        old_target = str(active.resolve(strict=False))
+        if old_target == str(snapshot.resolve()):
+            temporary.unlink()
+            return {
+                "active": str(active),
+                "target": str(snapshot),
+                "previous": None,
+                "reused": True,
+            }
         if previous.exists() and not previous.is_symlink():
             temporary.unlink()
             raise BuildError(f"refusing to replace non-symlink rollback path: {previous}")
@@ -951,28 +1138,34 @@ def retire_ornith_1_0(previous: str | None) -> dict[str, Any]:
     return {"retired": True, "recipe": recipe, "removed_path": removed_path}
 
 
-def install_published(recipe: Recipe, cache_dir: Path) -> dict[str, Any]:
+def install_published(
+    recipe: Recipe,
+    cache_dir: Path,
+    *,
+    activate: bool = True,
+) -> dict[str, Any]:
     active = geer_home() / "models" / "active"
-    if active.is_symlink() and active.exists():
-        snapshot = active.resolve()
+    snapshot = published_snapshot_path(recipe, cache_dir)
+    if snapshot.is_dir():
         try:
-            verified = verify_output(recipe, snapshot)
-        except BuildError:
+            verified = verify_published_snapshot(recipe, snapshot, cache_dir)
+        except (BuildError, OSError, ValueError, KeyError, TypeError):
             pass
         else:
+            activation = {
+                "active": str(active),
+                "target": str(snapshot),
+                "previous": None,
+                "reused": True,
+            }
+            if activate:
+                activation = activate_snapshot(snapshot)
             return {
                 **verified,
                 "repo_id": str(recipe.distribution["repo_id"]),
                 "revision": distribution_revision(recipe),
-                "activation": {
-                    "active": str(active),
-                    "target": str(snapshot),
-                    "previous": None,
-                    "reused": True,
-                },
+                "activation": activation if activate else None,
             }
-    elif active.is_symlink():
-        active.unlink()
 
     plan = published_install_plan(recipe, cache_dir)
     require_disk_space(cache_dir, int(plan["required_free_bytes"]))
@@ -989,9 +1182,11 @@ def install_published(recipe: Recipe, cache_dir: Path) -> dict[str, Any]:
         ).resolve()
     except Exception as error:
         raise BuildError(f"published model download failed: {error}") from error
-    verified = verify_output(recipe, snapshot)
-    activation = activate_snapshot(snapshot)
-    activation["retired_previous"] = retire_ornith_1_0(activation["previous"])
+    try:
+        verified = verify_published_snapshot(recipe, snapshot, cache_dir)
+    except (BuildError, OSError):
+        verified = _repair_published_snapshot(recipe, snapshot, cache_dir)
+    activation = activate_snapshot(snapshot) if activate else None
     return {
         **verified,
         "repo_id": plan["repo_id"],
