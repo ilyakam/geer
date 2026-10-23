@@ -103,7 +103,8 @@ def test_initialize_assets_links_only_selected_model_files(tmp_path: Path) -> No
 
 @pytest.mark.parametrize("vision", [None, {}, {"model_type": "qwen3_5_moe"}])
 def test_model_inputs_follow_selected_config_and_legacy_probes_do_not_rewrite_state(
-    tmp_path: Path, vision: dict | None,
+    tmp_path: Path,
+    vision: dict | None,
 ) -> None:
     workspace = Workspace(tmp_path)
     source = make_model(tmp_path / "source")
@@ -192,5 +193,20 @@ def test_full_verification_detects_same_size_corruption(tmp_path: Path) -> None:
 
 def test_model_alias_reports_quantization() -> None:
     assert model_alias({"build": {"display_name": "Geer Built Model"}}) == "Geer Built Model"
-    assert model_alias({"quantization": {"bits": 6}}).endswith("(6-bit MLX)")
+    assert model_alias({"quantization": {"bits": 6}}) == ("Geer Sage-A1.5 35B-A3B (6-bit MLX)")
     assert model_alias({}) == DEFAULT_MODEL_ALIAS
+
+
+@pytest.mark.parametrize("variant", ("6-bit", "4/8-bit"))
+def test_model_alias_preserves_ornith_rollback_identity(variant: str) -> None:
+    name = f"Geer Ornith 1.5 35B-A3B ({variant} MLX)"
+    assert model_alias({"build": {"display_name": name}}) == name
+
+
+@pytest.mark.parametrize("family,label", (("sage-a1.5", "Sage-A1.5"), ("ornith-1.5", "Ornith 1.5")))
+@pytest.mark.parametrize("variant,bits,label_bits", (("6bit", 6, "6"), ("4-8bit", 4, "4/8")))
+def test_legacy_alias_derives_family_and_variant_from_recipe(
+    family, label, variant, bits, label_bits
+):
+    manifest = {"build": {"recipe": f"{family}-35b-{variant}"}, "quantization": {"bits": bits}}
+    assert model_alias(manifest) == f"Geer {label} 35B-A3B ({label_bits}-bit MLX)"

@@ -4,6 +4,89 @@ import SwiftUI
 
 private let setupCommand = "/usr/local/bin/geer"
 private let fallbackCommand = "/Library/Application Support/Geer/app/geer-setup.command"
+private let protocolVersion = 2
+
+struct SetupModelOption: Identifiable {
+    let id: String
+    let name: String
+    let eligible: Bool
+    let reason: String
+    let variant: String
+    let context: String
+    let download: String
+    let requiredSpace: String
+    let footprint: String
+    let labels: [String]
+
+    init?(_ row: [String: Any]) {
+        guard let id = row["family"] as? String,
+              let name = row["display_name"] as? String,
+              let eligible = row["eligible"] as? Bool,
+              let context = row["context_window_human"] as? String,
+              let download = row["download_human"] as? String,
+              let requiredSpace = row["required_free_human"] as? String,
+              let footprint = row["installed_human"] as? String else { return nil }
+        let variant = row["model_variant"] as? String
+        guard variant != nil || !eligible else { return nil }
+        self.id = id
+        self.name = name
+        self.eligible = eligible
+        self.reason = row["reason"] as? String ?? ""
+        self.variant = variant ?? "Unavailable"
+        self.context = context
+        self.download = download
+        self.requiredSpace = requiredSpace
+        self.footprint = footprint
+        self.labels = [("recommended", "Recommended"), ("active", "Current"),
+                       ("installed", "Downloaded and verified")].compactMap { key, label in
+            row[key] as? Bool == true ? label : nil
+        }
+    }
+}
+
+struct SetupBenchmarkRow: Identifiable {
+    let id: String
+    let label: String
+    let description: String
+    let ornith: String
+    let sage: String
+}
+
+struct SetupBenchmarkComparison {
+    let title: String
+    let note: String
+    let methodology: String
+    let sourceURL: URL
+    let rows: [SetupBenchmarkRow]
+
+    init?(_ value: [String: Any]) {
+        guard let title = value["title"] as? String,
+              let note = value["note"] as? String,
+              let methodology = value["methodology"] as? String,
+              let source = value["source_url"] as? String,
+              let sourceURL = URL(string: source), sourceURL.scheme == "https",
+              let rows = value["rows"] as? [[String: Any]] else { return nil }
+        var parsed: [SetupBenchmarkRow] = []
+        func score(_ value: Any?) -> String? {
+            guard let number = value as? NSNumber,
+                  CFGetTypeID(number) != CFBooleanGetTypeID(),
+                  number.doubleValue.isFinite else { return nil }
+            return String(format: "%.1f", locale: Locale(identifier: "en_US_POSIX"), number.doubleValue)
+        }
+        for row in rows {
+            guard let id = row["id"] as? String, let label = row["label"] as? String,
+                  let description = row["description"] as? String,
+                  let ornith = score(row["ornith"]), let sage = score(row["sage"]) else { return nil }
+            parsed.append(SetupBenchmarkRow(id: id, label: label, description: description,
+                                           ornith: ornith, sage: sage))
+        }
+        self.title = title
+        self.note = note
+        self.methodology = methodology
+        self.sourceURL = sourceURL
+        self.rows = parsed
+    }
+}
 
 private struct GeerLogo: View {
     private let image: NSImage? = {
@@ -110,11 +193,21 @@ final class SetupViewModel: ObservableObject {
     @Published var decisionPrompt: String?
     @Published var defaultDecision = "yes"
     @Published var retainedModel = false
-    @Published var modelName = "Selected for this Mac when setup begins"
+    @Published var modelName = "Choose Sage or Ornith for this Mac"
     @Published var download = "Calculated before download"
     @Published var contextWindow = "Calculated for this Mac"
     @Published var kvCache = "BF16"
     @Published var requiredSpace = "Calculated before download"
+    @Published var modelOptions: [SetupModelOption] = []
+    @Published var selectedFamily = ""
+    @Published var choosingModel = false
+    @Published var comparison: SetupBenchmarkComparison?
+    @Published var modelVariant = ""
+    @Published var modelFootprint = "Calculated before download"
+
+    var selectedModel: SetupModelOption? {
+        modelOptions.first { $0.id == selectedFamily }
+    }
 
     private var process: Process?
     private var input: FileHandle?
@@ -131,6 +224,9 @@ final class SetupViewModel: ObservableObject {
         stdoutFinished = false
         decisionPrompt = nil
         pendingDecisionID = nil
+        choosingModel = false
+        modelOptions = []
+        comparison = nil
         t3ApplicationURL = nil
         state = .running
         headline = "Preparing Geer"
@@ -141,7 +237,7 @@ final class SetupViewModel: ObservableObject {
         let stderr = Pipe()
         let stdin = Pipe()
         process.executableURL = URL(fileURLWithPath: setupCommand)
-        process.arguments = ["setup", "--frontend", "json-v1"]
+        process.arguments = ["setup", "--frontend", "json-v2"]
         process.standardOutput = stdout
         process.standardError = stderr
         process.standardInput = stdin
@@ -210,6 +306,8 @@ final class SetupViewModel: ObservableObject {
         self.input = nil
         if !stdoutBuffer.isEmpty && state != .failed && state != .cancelled {
             fail("The setup command ended with incomplete setup data. Run geer setup to finish.")
+        } else if exitStatus == 2 && state != .failed && state != .cancelled {
+            fail("This setup application and the installed Geer command use incompatible setup options. Reinstall matching versions or run geer setup in a terminal.")
         } else if exitStatus != 0 && state != .failed && state != .cancelled {
             fail("The setup command exited with status \(exitStatus). Your existing model and completed downloads were kept. Run geer setup to retry.")
         } else if state == .running {
@@ -219,18 +317,32 @@ final class SetupViewModel: ObservableObject {
 
     private func handle(_ event: [String: Any]) {
         guard state != .failed && state != .cancelled else { return }
-        guard (event["protocol_version"] as? Int) == 1 else {
+        guard (event["protocol_version"] as? Int) == protocolVersion else {
             fail("This setup application and the installed Geer command use incompatible protocols.")
             return
         }
         switch event["event"] as? String {
+        case "model_choice_required":
+            guard readCatalog(event), let decisionID = event["decision_id"] as? String else {
+                fail("Geer returned an invalid model chooser. Reinstall matching versions of Geer and Geer Setup.")
+                return
+            }
+            pendingDecisionID = decisionID
+            choosingModel = true
+            phaseTitle = "Choose a local model"
         case "plan":
+            guard readCatalog(event) else {
+                fail("Geer returned an invalid model plan. Reinstall matching versions of Geer and Geer Setup.")
+                return
+            }
             if let plan = event["plan"] as? [String: Any] {
                 modelName = plan["display_name"] as? String ?? modelName
                 download = plan["download_human"] as? String ?? download
                 requiredSpace = plan["required_free_human"] as? String ?? requiredSpace
                 contextWindow = plan["context_window_human"] as? String ?? contextWindow
                 kvCache = plan["kv_cache"] as? String ?? kvCache
+                modelVariant = plan["model_variant"] as? String ?? modelVariant
+                modelFootprint = plan["installed_human"] as? String ?? modelFootprint
             }
             retainedModel = event["retained_model"] as? Bool ?? false
         case "phase":
@@ -282,15 +394,36 @@ final class SetupViewModel: ObservableObject {
         }
     }
 
+    private func readCatalog(_ event: [String: Any]) -> Bool {
+        guard let catalog = event["catalog"] as? [String: Any],
+              let selected = catalog["selected"] as? String,
+              let rows = catalog["models"] as? [[String: Any]],
+              let rawComparison = event["comparison"] as? [String: Any],
+              let comparison = SetupBenchmarkComparison(rawComparison) else { return false }
+        let models = rows.compactMap(SetupModelOption.init)
+        guard models.count == 2, models.count == rows.count,
+              Set(models.map(\.id)) == Set(["ornith", "sage"]),
+              models.contains(where: { $0.id == selected }) else { return false }
+        modelOptions = models
+        selectedFamily = selected
+        self.comparison = comparison
+        return true
+    }
+
     func answer(_ choice: String) {
         guard let decisionID = pendingDecisionID, let input else { return }
-        let response: [String: String] = ["decision_id": decisionID, "choice": choice]
+        if choosingModel && choice != "cancel" {
+            guard modelOptions.contains(where: { $0.id == choice && $0.eligible }) else { return }
+        }
+        let response: [String: Any] = ["protocol_version": protocolVersion,
+                                       "decision_id": decisionID, "choice": choice]
         guard var data = try? JSONSerialization.data(withJSONObject: response) else { return }
         data.append(0x0A)
         do {
             try input.write(contentsOf: data)
             decisionPrompt = nil
             pendingDecisionID = nil
+            choosingModel = false
         } catch {
             fail("Could not send your choice to Geer: \(error.localizedDescription)")
         }
@@ -310,6 +443,7 @@ final class SetupViewModel: ObservableObject {
         self.input = nil
         decisionPrompt = nil
         pendingDecisionID = nil
+        choosingModel = false
     }
 
     func openTerminalFallback() {
@@ -340,6 +474,7 @@ final class SetupViewModel: ObservableObject {
         phaseTitle = "Setup did not finish"
         decisionPrompt = nil
         pendingDecisionID = nil
+        choosingModel = false
         t3ApplicationURL = nil
         if process?.isRunning == true { process?.terminate() }
     }
@@ -348,6 +483,69 @@ final class SetupViewModel: ObservableObject {
 struct SetupView: View {
     @StateObject private var model = SetupViewModel()
     @State private var showLogs = false
+    @State private var showMethodology = false
+
+    private var modelChooser: some View {
+        GroupBox("Choose a local model") {
+            VStack(alignment: .leading, spacing: 10) {
+                Picker("Model family", selection: $model.selectedFamily) {
+                    ForEach(model.modelOptions) { option in
+                        Text(option.name + (option.labels.isEmpty ? "" : " · " + option.labels.joined(separator: " · ")))
+                            .tag(option.id)
+                            .disabled(!option.eligible)
+                    }
+                }
+                .pickerStyle(.radioGroup)
+                ForEach(model.modelOptions.filter { !$0.eligible }) { option in
+                    Text("\(option.name): \(option.reason)")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                if let selected = model.selectedModel {
+                    Text("\(selected.variant) · Configured context: \(selected.context) · Images supported")
+                    Text("Missing download estimate: \(selected.download)")
+                    Text("Additional disk required: \(selected.requiredSpace) · Full model footprint: \(selected.footprint)")
+                }
+                Text("Context limits depend on available memory.")
+                    .font(.caption).foregroundStyle(.secondary)
+                if let comparison = model.comparison {
+                    Divider()
+                    Text(comparison.title).font(.headline)
+                    Grid(alignment: .leading, horizontalSpacing: 18, verticalSpacing: 4) {
+                        GridRow {
+                            Text("Upstream result")
+                            Text("Ornith")
+                            Text("Sage")
+                        }.fontWeight(.semibold)
+                        ForEach(comparison.rows) { row in
+                            GridRow {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(row.label)
+                                    Text(row.description).font(.caption).foregroundStyle(.secondary)
+                                }
+                                Text(row.ornith)
+                                Text(row.sage)
+                            }
+                        }
+                    }
+                    Text(comparison.note).font(.caption).foregroundStyle(.secondary)
+                    DisclosureGroup("Methodology and source", isExpanded: $showMethodology) {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text(comparison.methodology)
+                            ForEach(comparison.rows) { row in
+                                Text("\(row.label): \(row.description)")
+                            }
+                            Link("Read the upstream comparison", destination: comparison.sourceURL)
+                        }.font(.caption).textSelection(.enabled)
+                    }
+                }
+                Button("Review Installation") { model.answer(model.selectedFamily) }
+                    .disabled(model.selectedModel?.eligible != true)
+                    .keyboardShortcut(.defaultAction)
+            }
+            .font(.callout)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 22) {
@@ -384,16 +582,20 @@ struct SetupView: View {
                         )
                     }.frame(maxWidth: .infinity, alignment: .leading)
                 }
+            } else if model.state == .running && model.choosingModel {
+                ScrollView { modelChooser }
             } else if model.state == .running {
                 VStack(alignment: .leading, spacing: 10) {
                     Text(model.phaseTitle).font(.headline)
                     ProgressView(value: model.completed, total: max(model.total, 1))
                     HStack {
-                        Text(model.retainedModel ? "Matching retained model found — Geer will verify and reuse it" : "\(model.modelName) · \(model.download)")
+                        Text(model.retainedModel ? "Current verified model will be reused" : model.modelName)
                         Spacer()
-                        Text("Required: \(model.requiredSpace)")
+                        Text("Additional disk: \(model.requiredSpace)")
                     }.font(.caption).foregroundStyle(.secondary)
-                    Text("Context: \(model.contextWindow) · KV cache: \(model.kvCache)")
+                    Text("\(model.modelVariant) · Configured context: \(model.contextWindow) · KV cache: \(model.kvCache)")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Text("Missing download estimate: \(model.download) · Full model footprint: \(model.modelFootprint)")
                         .font(.caption).foregroundStyle(.secondary)
                 }
             } else {
@@ -417,7 +619,7 @@ struct SetupView: View {
                 }
             }
 
-            if !model.logLines.isEmpty {
+            if !model.logLines.isEmpty && !model.choosingModel {
                 SetupDetailsView(lines: model.logLines, isExpanded: $showLogs)
             } else {
                 Spacer(minLength: 0)
@@ -445,7 +647,7 @@ struct SetupView: View {
             }
         }
         .padding(28)
-        .frame(width: 680, height: 580)
+        .frame(width: 780, height: 760)
     }
 }
 

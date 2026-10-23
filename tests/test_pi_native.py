@@ -4,6 +4,7 @@ import json
 import os
 import select
 import sys
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -51,6 +52,47 @@ def test_native_discovery_has_real_local_models_and_skills_without_services(
     models = json.loads((workspace.pi_config / "models.json").read_text())
     assert models["providers"]["geer"]["models"][0]["id"] == "local-test"
     assert not (workspace.pi_config / "sessions").exists()
+
+
+@pytest.mark.parametrize(
+    "family",
+    ("sage-a1.5", "ornith-1.5"),
+)
+@pytest.mark.parametrize(
+    ("variant", "memory_gib", "context_window"),
+    (("6bit", 128, 262_144), ("4-8bit", 32, 65_536)),
+)
+def test_family_discovery_preserves_image_inputs_and_configured_context_without_inference(
+    native_workspace,
+    monkeypatch,
+    variant,
+    memory_gib,
+    context_window,
+    family,
+):
+    path = Path(__file__).parents[1] / "model-recipes" / f"{family}-35b-{variant}.toml"
+    recipe = tomllib.loads(path.read_text())
+    manifest = {
+        "model_id": "geer-local",
+        "context_length": 262_144,
+        "input_modalities": ["text", "image"],
+        "build": {"display_name": recipe["display_name"], "recipe": recipe["id"]},
+    }
+    monkeypatch.setattr("geer.runtime.verify_assets", lambda workspace: manifest)
+    monkeypatch.setattr("geer.hardware.memory_bytes", lambda: memory_gib * 1024**3)
+    monkeypatch.setattr("geer.runtime.start_server", lambda *a, **k: pytest.fail("inference"))
+
+    command, _ = prepare_native_pi(native_workspace, ["--mode", "rpc", "--no-session"])
+
+    models = json.loads((native_workspace.pi_config / "models.json").read_text())
+    model = models["providers"]["geer"]["models"][0]
+    assert model["id"] == "geer-local"
+    assert model["name"] == recipe["display_name"]
+    assert model["input"] == ["text", "image"]
+    assert model["contextWindow"] == context_window
+    assert recipe["output"]["preserve_multimodal"] is True
+    assert command[command.index("--model") + 1] == "geer-local"
+    assert recipe["display_name"] in command[command.index("--append-system-prompt") + 1]
 
 
 def test_native_background_generation_starts_local_server_without_tools_or_skills(

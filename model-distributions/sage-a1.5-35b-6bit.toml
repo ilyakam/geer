@@ -1,0 +1,7 @@
+schema_version = 1
+recipe = "sage-a1.5-35b-6bit"
+repo_id = "ilyakam/Geer-Sage-A1.5-35B-A3B-6bit-MLX"
+revision = "4ebdbce13e27fdc93fd317b44bc04fe5590bbb8b"
+tag = "v1"
+expected_bytes = 29082315262
+model_card_dir = "../model-cards/sage-a1.5-35b-6bit"

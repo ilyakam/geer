@@ -13,9 +13,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Forward images to supported models through Pi
 - Pinned Sage-A1.5 6-bit and mixed 4/8-bit conversion recipes, model cards,
   attribution evidence, and publication instructions.
+- Hardware-aware Sage-A1.5 and Ornith 1.5 choices in the initial terminal and
+  native setup wizard, with verified local availability, download and disk
+  estimates, and selected upstream benchmark results.
 
 ### Changed
 
+- Recommend Sage-A1.5 while preserving eligible confirmed choices, verified
+  legacy activation, or a sole verified current compatible cached family.
+  Both families retain images and use the existing memory profiles.
+- Retain the confirmed model choice on upgrades and reinstalls. Model commands
+  support both families; `model add` downloads and verifies without changing
+  the active choice. Explicit activation retains histories and rollback.
 - Upgrade the pinned Pi harness to official stable 1.4.0.
 - Use T3's native Pi driver for Geer, preserving local background generation
   and migrating managed model selections without the Grok version warning.

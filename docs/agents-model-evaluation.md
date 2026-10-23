@@ -39,6 +39,13 @@ Upstream quality is a model-level proxy for each conversion. Do not invent
 quantization penalties. Every exact artifact must pass the same small sanity
 suite; passing it establishes scoped behavior, not the upstream benchmark score.
 
+For the Sage/Ornith comparison, retain the frozen eight-benchmark panel across
+four families: SWE-bench Pro and Multilingual for coding; IFBench for
+instruction following; ALE-CLI, VitaBench, and PinchBench-v1 for general agent
+tasks; BrowseComp and DeepResearchBench II for search/research. Use the base
+search results without orchestration. The chooser's three display rows below
+do not replace this panel or change the 50/30/20 weights.
+
 Score verified useful context as 32K = 50, 64K = 75, and 128K or greater = 100,
 where K means 1,024 tokens. Larger windows receive no extra initial ranking
 credit; record their measured capacity. A tier needs correct completion
@@ -46,11 +53,16 @@ without silent truncation, OOM, sustained memory pressure, or unacceptable
 latency. Above 32K, use a representative task that benefits from retaining the
 additional material. Padding alone proves capacity, not usefulness.
 
-For speed, freeze a measured reference on that host. Use Ornith where it is
-eligible, otherwise the first eligible comparator. Use identical fixtures,
-output budgets, sampling and thinking settings, and cache conditions. Measure
-decode tokens/s primarily; report fresh-prompt time to first token and prefill
-tokens/s alongside it. Separate model loading from time to first token.
+For speed, freeze a measured reference on that host. Use the currently shipped
+model and runtime where eligible, otherwise the first eligible comparator.
+Use identical fixtures, output budgets, sampling and thinking settings, and
+cache conditions. Measure decode tokens/s primarily; report fresh-prompt time
+to first token and prefill tokens/s alongside it. Separate model loading from
+time to first token.
+
+Run realistic interactive qualification with production cache settings.
+Run cold-prompt speed probes in isolation and label them separately. Exclude
+timings that overlap queued or concurrent requests from speed rankings.
 
 For a numerical comparison on the common 32K workload, use:
 
@@ -65,6 +77,27 @@ Prefill remains separately reported because it already contributes to TTFT.
 Use the initial measurements to agree on acceptable fresh-32K TTFT and minimum
 decode rate before calling a profile qualified. The request timeout below
 bounds investigation; it is not an interactive usability standard.
+
+## Chooser comparison
+
+`src/geer/model_benchmarks.py` provides the selected upstream display rows for
+terminal and native setup. Keep their scores and interpretation aligned with
+[Table 1 of the Sage-A1.5 report](https://arxiv.org/html/2610.28578v1#S3.T1).
+They describe upstream models, not Geer's quantized artifacts or physical Mac
+measurements. IFBench is strict prompt-level instruction-following accuracy,
+not a coding score. PinchBench-v1 tests general agent tasks.
+
+Sage reports original results where available and runs missing comparisons
+with its own protocol. Ornith's report omits IFBench and PinchBench. Their
+Ornith lineage in Sage's table is inferred from that reporting policy;
+the table provides no per-run manifest for those cells.
+
+SWE-bench Pro uses [Ornith's OpenHands setup at 256K](https://ornith.ai/ornith_1_5.html)
+and [Sage's Mini-SWE-Agent setup at 200K with compaction](https://huggingface.co/InternScience/Sage-A1.5#performance).
+Record those differences when interpreting the scores. Include regressions
+when describing the full comparison. DeepResearchBench II reports 48.6 for
+Ornith and 43.7 for Sage without orchestration. Keep orchestration results and
+specialized teacher ablations separate from the base model scores.
 
 ## Bounded trials
 

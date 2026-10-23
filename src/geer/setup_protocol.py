@@ -9,7 +9,7 @@ from contextlib import redirect_stdout
 from dataclasses import asdict, is_dataclass
 from typing import Any, TextIO
 
-PROTOCOL_VERSION = 1
+PROTOCOL_VERSION = 2
 
 
 class ProtocolError(RuntimeError):
@@ -48,6 +48,25 @@ class JsonSetupFrontend:
             default="yes" if default_yes else "no",
             choices=["yes", "no"],
         )
+        return self._read_choice(decision_id, {"yes", "no"}) == "yes"
+
+    def choose_model(
+        self,
+        catalog: dict[str, Any],
+        comparison: dict[str, Any],
+    ) -> str | None:
+        decision_id = str(uuid.uuid4())
+        self.emit(
+            "model_choice_required",
+            decision_id=decision_id,
+            catalog=catalog,
+            comparison=comparison,
+        )
+        eligible = {row["family"] for row in catalog["models"] if row["eligible"]}
+        choice = self._read_choice(decision_id, eligible | {"cancel"})
+        return None if choice == "cancel" else choice
+
+    def _read_choice(self, decision_id: str, choices: set[str]) -> str:
         line = self.input.readline()
         if not line:
             raise ProtocolError("the setup window closed before answering")
@@ -55,12 +74,14 @@ class JsonSetupFrontend:
             response = json.loads(line)
         except json.JSONDecodeError as error:
             raise ProtocolError("the setup window sent an invalid response") from error
+        if not isinstance(response, dict) or response.get("protocol_version") != PROTOCOL_VERSION:
+            raise ProtocolError("the setup window and Geer use incompatible protocols")
         if response.get("decision_id") != decision_id:
             raise ProtocolError("the setup window answered the wrong decision")
         choice = response.get("choice")
-        if choice not in {"yes", "no"}:
+        if not isinstance(choice, str) or choice not in choices:
             raise ProtocolError("the setup window sent an unknown decision")
-        return choice == "yes"
+        return choice
 
 
 def _json_default(value: Any) -> Any:
@@ -85,7 +106,7 @@ def run_json_setup(
     )
     frontend.emit(
         "hello",
-        capabilities=["decisions", "phase_progress", "logs", "resume"],
+        capabilities=["decisions", "model_choices", "phase_progress", "logs", "resume"],
     )
     try:
         with redirect_stdout(sys.stderr):
