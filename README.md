@@ -8,17 +8,19 @@ Free, private, and open source coding agent that challenges the frontier.
 
 ## At a glance
 
-Geer = [Sage-A1.5 or Ornith 1.5](https://huggingface.co/ilyakam/models) (via [oMLX](https://github.com/jundot/omlx)) + [Pi](https://pi.dev) + [T3 Code](https://t3.codes/) (native Pi driver)
+Geer = [Sage-A1.5 or Ornith 1.5](https://huggingface.co/ilyakam/models) (via [oMLX](https://github.com/jundot/omlx)) + [Pi](https://pi.dev) + [T3 Code](https://t3.codes/)
 
 ## Minimum system requirements
 
 - Apple Silicon (M-series chip)
-- macOS 13
+- macOS 15 or newer
 - 32 GiB of unified memory
-- 35 GB of disk space
+- About 35 GB of free disk space for mixed 4/8-bit models, or 42 GB for 6-bit models
 
-Allow more disk space to retain both model families. Setup shows the remaining
-download, additional disk space needed, and total model size separately.
+Fresh-install disk estimates include dependencies and temporary space. Allow
+more disk space for inference caches or to retain both model families. Setup
+shows the remaining download, additional disk space needed, and total model
+size separately.
 
 ## Installation
 
