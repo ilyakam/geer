@@ -71,3 +71,4 @@ The dated records below are historical summaries, not new qualification runs.
 | [2026-08-20: Ornith 1.5 MLX conversion and migration](2026-08-20-ornith-1.5-mlx.md) | Conversion and installed migration incorporated into 0.2.0. |
 | [2026-08-25: Qwen3.6 MoE preflight for a 16 GB M1](2026-08-25-qwen3.6-m1-preflight.md) | Inspection only; bounded expert streaming unimplemented. |
 | [2026-09-30: Pi harness integration](2026-09-30-pi-harness.md) | Real T3/Pi checks passed; incorporated into 0.3.0. |
+| [2026-10-22: Sage-A1.5 qualification and model selection](2026-10-22-sage-a1.5-qualification.md) | Both Sage quantizations passed scoped M4 Max 128 GiB checks; 0.4.0 shipped both families with Sage recommended. |

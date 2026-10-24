@@ -92,9 +92,18 @@ Before model, quantization, runtime, or benchmark work, search
 [the experiment ledger](docs/experiments/README.md) and matching dated records.
 Consult `geer-private/experiments/` when accessible; flag incomplete history
 when it is unavailable. Compare exact artifacts and previous blockers, and
-explain what changed before repeating a trial. Record outcomes and concrete
-revisit conditions. Keep working research private and publish summaries only
-after explicit maintainer review, following the ledger's publication rules.
+explain what changed before repeating a trial. Record the outcome, tested
+revisions, limitations, decision, and concrete revisit conditions. Keep working
+research private and publish summaries only after explicit maintainer review,
+following the ledger's publication rules. Use reviewed public summaries to
+document experiments incorporated into released model or hardware support.
+
+Retire completed or superseded experiment branches and worktrees once the
+records and merged implementation preserve their useful findings. Archive any
+unique commits, uncommitted patches, and irreplaceable evidence privately and
+verify recovery before removal. Keep a branch only for active work or a named
+preservation gap, and report the remaining action. Historical trial branches
+are not a substitute for the experiment ledger.
 
 ## Guardrails
 
@@ -141,4 +150,6 @@ after explicit maintainer review, following the ledger's publication rules.
 - Verify the frozen package when behavior differs from source execution.
   Test integration changes in T3 Code with a real repository read/edit/test
   turn; use ignored synthetic fixtures and check the resulting files.
-- Record user-facing changes briefly under `[Unreleased]` in `CHANGELOG.md`.
+- Record changes to user-visible product behavior under `[Unreleased]` in
+  `CHANGELOG.md`. Documentation-only corrections, experiment records, and
+  agent guidance do not need a changelog entry.
