@@ -12,6 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Experimental Qwen3.5-9B with full vision through llama.cpp, recommended for
   16 GiB to less than 32 GiB Macs and optional on larger Macs.
 
+### Fixed
+
+- Wait for Semble's incremental index refresh during retrieval verification.
+
 ## [0.4.0] - 2026-10-23
 
 ### Added
