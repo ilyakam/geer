@@ -183,7 +183,13 @@ def ensure_api_key(workspace: Workspace) -> str:
     return key
 
 
-def bootstrap_runtime(workspace: Workspace) -> dict[str, str]:
+def bootstrap_runtime(
+    workspace: Workspace, *, backend: str | None = None,
+) -> dict[str, str]:
+    if backend == "llama.cpp":
+        from .llama_runtime import bootstrap_runtime as bootstrap_llama
+
+        return bootstrap_llama(workspace)
     command = workspace.runtime / "omlx" / "bin" / "omlx"
     marker = workspace.runtime / "runtime.json"
     if command.is_file() and marker.is_file():
@@ -398,6 +404,11 @@ def serve_command(
     port: int = DEFAULT_PORT,
 ) -> list[str]:
     manifest = verify_assets(workspace)
+    from .llama_runtime import is_llama
+    from .llama_runtime import serve_command as llama_serve_command
+
+    if is_llama(manifest):
+        return llama_serve_command(workspace, host, port)
     if host not in {"127.0.0.1", "::1", "localhost"}:
         raise AssetError("the proof-of-concept server must bind to loopback")
     if not 1 <= port <= 65535:
@@ -440,6 +451,11 @@ def run_server(
     host: str = DEFAULT_HOST,
     port: int = DEFAULT_PORT,
 ) -> int:
+    from .llama_runtime import is_llama
+    from .llama_runtime import run_server as run_llama
+
+    if is_llama(verify_assets(workspace)):
+        return run_llama(workspace, host, port)
     ensure_model_settings(workspace)
     command = serve_command(workspace, host, port)
     state = workspace.omlx_state
@@ -473,6 +489,11 @@ def _start_server_locked(
     timeout: float,
 ) -> dict[str, Any]:
     manifest = verify_assets(workspace)
+    from .llama_runtime import is_llama
+    from .llama_runtime import start_server as start_llama
+
+    if is_llama(manifest):
+        return start_llama(workspace, host, requested_port, timeout)
     api_key = ensure_api_key(workspace)
     automatic = requested_port is None
     candidate = configured_port(workspace) if automatic else requested_port
@@ -703,6 +724,11 @@ def stop_server(
     port: int | None = None,
     timeout: float = 10,
 ) -> dict[str, Any]:
+    from .llama_runtime import stop_server as stop_llama
+
+    stopped_llama = stop_llama(workspace, port=port, timeout=max(timeout, 20))
+    if stopped_llama is not None:
+        return stopped_llama
     selected_port = configured_port(workspace) if port is None else port
     pid = next(
         (
@@ -719,6 +745,15 @@ def stop_server(
     os.kill(pid, signal.SIGTERM)
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
+        # setup can start and stop the backend in this same process. Reap an
+        # exited child before probing its PID: kill(pid, 0) also finds zombies.
+        try:
+            exited, _ = os.waitpid(pid, os.WNOHANG)
+        except ChildProcessError:
+            exited = 0
+        if exited == pid:
+            workspace.server_pid.unlink(missing_ok=True)
+            return {"server": "stopped", "pid": pid, "stopped": True}
         try:
             os.kill(pid, 0)
         except ProcessLookupError:
@@ -729,6 +764,10 @@ def stop_server(
 
 
 def _managed_server_process(workspace: Workspace, pid: int, port: int) -> bool:
+    from .llama_runtime import managed_server_process as managed_llama
+
+    if managed_llama(workspace, pid, port):
+        return True
     try:
         result = subprocess.run(
             ["ps", "-p", str(pid), "-o", "uid=,command="],
@@ -822,13 +861,18 @@ def runtime_status(
     verify_hashes: bool = False,
 ) -> dict[str, Any]:
     manifest = verify_assets(workspace, verify_hashes=verify_hashes)
-    cache = cache_directory(workspace, manifest)
+    from .llama_runtime import command as llama_command
+    from .llama_runtime import is_llama
+
+    llama = is_llama(manifest)
+    cache = None if llama else cache_directory(workspace, manifest)
     status: dict[str, Any] = {
         "assets": "ok",
         "model_id": manifest["model_id"],
-        "omlx": omlx_command(workspace),
+        **({"llama_cpp": llama_command(workspace)} if llama
+           else {"omlx": omlx_command(workspace)}),
         "endpoint": base_url,
-        "cache": {
+        "cache": {"context_checkpoints": 4, "kv_cache": "q4_0"} if llama else {
             "directory": str(cache),
             "ssd_max_size": CACHE_MAX_SIZE,
             "hot_max_size": HOT_CACHE_MAX_SIZE,
@@ -868,6 +912,21 @@ def doctor(workspace: Workspace, base_url: str) -> dict[str, Any]:
 
 
 def snapshot_runtime(workspace: Workspace, base_url: str) -> dict[str, Any]:
+    from .llama_runtime import is_llama
+
+    if workspace.manifest.is_file():
+        manifest = verify_assets(workspace)
+        if is_llama(manifest):
+            from .llama_distribution import LLAMA_VERSION
+
+            health = get_json(f"{base_url}/health", api_key=ensure_api_key(workspace))
+            record = {
+                "captured_at": datetime.now(UTC).isoformat(),
+                "endpoint": base_url, "backend": "llama.cpp", "version": LLAMA_VERSION,
+                "default_model": manifest["model_id"], "server_status": health.get("status"),
+            }
+            _append_json_line(workspace.runtime_metrics, record)
+            return record
     status = get_json(
         f"{base_url}/api/status",
         api_key=ensure_api_key(workspace),
@@ -1138,7 +1197,8 @@ def ensure_pi_config(
             "reasoning": True,
             "input": manifest.get("input_modalities", ["text"]),
             "contextWindow": profile.max_context_window,
-            "maxTokens": min(16_384, profile.max_context_window // 4),
+            "maxTokens": (4096 if model_family(manifest) == "qwen"
+                          else min(16_384, profile.max_context_window // 4)),
             "cost": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0},
             "compat": {
                 "supportsStore": False,
@@ -1188,6 +1248,10 @@ def pi_arguments(
     if any(argument in {"--version", "-v", "--help", "-h"} for argument in arguments):
         return arguments
     manifest = manifest or verify_assets(workspace)
+    # Preserve native Pi thinking selections on family switches. The Qwen
+    # template receives Off versus enabled; its server keeps the same bounded
+    # reasoning allowance for all enabled levels, rather than advertising
+    # native Pi options that this launcher would then reject.
     options = [
         "--provider", "geer",
         "--model", str(manifest["model_id"]),
@@ -1333,6 +1397,11 @@ def ensure_model_settings(
     total_memory_bytes: int | None = None,
 ) -> dict[str, Any]:
     manifest = verify_assets(workspace)
+    from .llama_runtime import ensure_model_settings as ensure_llama_settings
+    from .llama_runtime import is_llama
+
+    if is_llama(manifest):
+        return ensure_llama_settings(workspace, total_memory_bytes=total_memory_bytes)
     model_id = str(manifest["model_id"])
     native_context_window = int(manifest.get("context_length", 262_144))
     hardware_profile = select_hardware_profile(

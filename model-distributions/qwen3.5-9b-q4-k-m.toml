@@ -1,0 +1,19 @@
+schema_version = 1
+recipe = "qwen3.5-9b-q4-k-m"
+format = "gguf"
+producer = "Unsloth"
+repo_id = "unsloth/Qwen3.5-9B-GGUF"
+revision = "3885219b6810b007914f3a7950a8d1b469d598a5"
+expected_bytes = 6598688544
+license = "Apache-2.0"
+source_url = "https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/tree/3885219b6810b007914f3a7950a8d1b469d598a5"
+
+[[files]]
+path = "Qwen3.5-9B-Q4_K_M.gguf"
+bytes = 5680522464
+sha256 = "03b74727a860a56338e042c4420bb3f04b2fec5734175f4cb9fa853daf52b7e8"
+
+[[files]]
+path = "mmproj-F16.gguf"
+bytes = 918166080
+sha256 = "f70dc3509053962b0d0d3ee8a7eacebf5d60aa560cad78254ae8698516ae029f"

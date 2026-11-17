@@ -78,7 +78,7 @@ def test_json_frontend_rejects_eof() -> None:
         frontend.decide("Continue?", default_yes=True)
 
 
-@pytest.mark.parametrize("choice", ["sage", "ornith", "cancel"])
+@pytest.mark.parametrize("choice", ["sage", "ornith", "qwen", "cancel"])
 def test_model_choice_has_family_identity_and_cancellation(choice: str) -> None:
     output = io.StringIO()
     frontend = JsonSetupFrontend(io.StringIO(), output)
@@ -95,6 +95,7 @@ def test_model_choice_has_family_identity_and_cancellation(choice: str) -> None:
     frontend.emit = answer  # type: ignore[method-assign]
     catalog = {"selected": "sage", "models": [
         {"family": "sage", "eligible": True}, {"family": "ornith", "eligible": True},
+        {"family": "qwen", "eligible": True},
     ]}
     assert frontend.choose_model(catalog, {"note": "quantized scores unmeasured"}) == (
         None if choice == "cancel" else choice
@@ -120,9 +121,28 @@ def test_model_choice_rejects_old_protocol_and_ineligible_responses(response, me
 
     frontend.emit = answer  # type: ignore[method-assign]
     with pytest.raises(ProtocolError, match=message):
-        frontend.choose_model({"models": [
+        frontend.choose_model({"selected": "sage", "models": [
             {"family": "sage", "eligible": True}, {"family": "ornith", "eligible": False},
         ]}, {})
+
+
+@pytest.mark.parametrize("catalog", [
+    {},
+    {"selected": "qwen", "models": []},
+    {"selected": "qwen", "models": [None]},
+    {"selected": "qwen", "models": [{"family": "qwen", "eligible": 1}]},
+    {"selected": "qwen", "models": [{"family": "qwen", "eligible": False}]},
+    {"selected": [], "models": [{"family": "qwen", "eligible": True}]},
+    {"selected": "qwen", "models": [
+        {"family": "qwen", "eligible": True}, {"family": "qwen", "eligible": True},
+    ]},
+])
+def test_model_choice_rejects_malformed_catalog_before_emitting(catalog) -> None:
+    output = io.StringIO()
+    frontend = JsonSetupFrontend(io.StringIO(), output)
+    with pytest.raises(ProtocolError, match="invalid model chooser"):
+        frontend.choose_model(catalog, {})
+    assert not output.getvalue()
 
 
 def test_json_frontend_reports_failures() -> None:
@@ -250,7 +270,18 @@ extension SetupViewModel {
              "context_window_human": "256K tokens", "download_human": "0 B",
              "required_free_human": "0 B", "installed_human": "26 GiB",
              "recommended": family == "sage", "active": family == "ornith",
-             "installed": true]
+             "installed": true, "source_url": "", "source_attribution": ""]
+            if family == "qwen" {
+                row["display_name"] = "Qwen3.5-9B (Q4_K_M GGUF + F16 vision)"
+                row["model_variant"] = "q4-k-m"
+                row["context_window_human"] = "128K tokens"
+                row["experimental"] = true
+                row["context_estimated"] = true
+                row["notes"] = "Estimated context; physical 24 GiB qualification pending."
+                row["source_attribution"] = "Model by Qwen. GGUF conversion by Unsloth."
+                row["source_url"] = "https://huggingface.co/unsloth/Qwen3.5-9B-GGUF"
+                row["input_modalities"] = ["text", "image"]
+            }
             if !eligible {
                 row["model_variant"] = NSNull()
                 row["context_window_human"] = "Unavailable"
@@ -260,7 +291,8 @@ extension SetupViewModel {
         let choice: [String: Any] = [
             "protocol_version": 2, "event": "model_choice_required", "decision_id": "family",
             "catalog": ["selected": "ornith", "models": [
-                option("sage", eligible: false), option("ornith", eligible: true)
+                option("sage", eligible: false), option("ornith", eligible: true),
+                option("qwen", eligible: true)
             ]],
             "comparison": ["title": "Selected upstream results", "note": "Not quantized scores",
                            "methodology": "Harnesses differ", "source_url": "https://example.org",
@@ -276,7 +308,7 @@ extension SetupViewModel {
         chooser.consume(choiceWire)
         precondition(chooser.choosingModel)
         precondition(chooser.selectedFamily == "ornith")
-        precondition(chooser.modelOptions.count == 2)
+        precondition(chooser.modelOptions.count == 3)
         precondition(chooser.modelOptions[0].variant == "Unavailable")
         precondition(!chooser.modelOptions[0].eligible)
         precondition(chooser.comparison?.rows[0].sage == "81.6")
@@ -294,6 +326,67 @@ extension SetupViewModel {
         precondition(answer["decision_id"] as? String == "family")
         precondition(answer["choice"] as? String == "ornith")
 
+        let lowMemory = SetupViewModel()
+        lowMemory.state = .running
+        var lowMemoryChoice = choice
+        lowMemoryChoice["catalog"] = ["selected": "qwen", "models": [
+            option("sage", eligible: false), option("ornith", eligible: false),
+            option("qwen", eligible: true)
+        ]]
+        lowMemory.handle(lowMemoryChoice)
+        precondition(lowMemory.choosingModel)
+        precondition(lowMemory.selectedFamily == "qwen")
+        precondition(lowMemory.selectedModel?.eligible == true)
+        precondition(lowMemory.selectedModel?.experimental == true)
+        precondition(lowMemory.selectedModel?.contextEstimated == true)
+        precondition(lowMemory.selectedModel?.contextLabel == "Estimated context cap")
+        precondition(lowMemory.selectedModel?.context == "128K tokens")
+        precondition(lowMemory.selectedModel?.labels.contains("Experimental") == true)
+        precondition(lowMemory.selectedModel?.supportsImages == true)
+        precondition(lowMemory.selectedModel?.notes?.contains("24 GiB") == true)
+        precondition(lowMemory.selectedModel?.sourceAttribution?.contains("Unsloth") == true)
+        precondition(lowMemory.selectedModel?.sourceURL?.host == "huggingface.co")
+
+        let singleFamily = SetupViewModel()
+        singleFamily.state = .running
+        var singleChoice = choice
+        singleChoice["catalog"] = [
+            "selected": "future", "models": [option("future", eligible: true)]
+        ]
+        singleFamily.handle(singleChoice)
+        precondition(singleFamily.choosingModel)
+        precondition(singleFamily.modelOptions.count == 1)
+
+        var wrongBoolean = option("qwen", eligible: true)
+        wrongBoolean["experimental"] = "true"
+        var numericEligibility = option("qwen", eligible: true)
+        numericEligibility["eligible"] = 1
+        var badModalities = option("qwen", eligible: true)
+        badModalities["input_modalities"] = ["text", "image", "image"]
+        var badSource = option("qwen", eligible: true)
+        badSource["source_url"] = "file:///tmp/model"
+        let invalidCatalogs: [[String: Any]] = [
+            ["selected": "qwen", "models": []],
+            ["selected": "missing", "models": [option("qwen", eligible: true)]],
+            ["selected": "qwen", "models": [option("qwen", eligible: false)]],
+            ["selected": "qwen", "models": [
+                option("qwen", eligible: true), option("qwen", eligible: true)
+            ]],
+            ["selected": "qwen", "models": [wrongBoolean]],
+            ["selected": "qwen", "models": [numericEligibility]],
+            ["selected": "qwen", "models": [badModalities]],
+            ["selected": "qwen", "models": [badSource]]
+        ]
+        for catalog in invalidCatalogs {
+            let invalid = SetupViewModel()
+            invalid.state = .running
+            var invalidChoice = choice
+            invalidChoice["catalog"] = catalog
+            invalid.handle(invalidChoice)
+            precondition(invalid.state == .failed)
+            precondition(!invalid.choosingModel)
+        }
+
         let oldProtocol = SetupViewModel()
         oldProtocol.state = .running
         oldProtocol.handle(["protocol_version": 1, "event": "hello"])
@@ -308,10 +401,11 @@ extension SetupViewModel {
         precondition(oldCommand.state == .failed)
         precondition(oldCommand.detail.contains("incompatible setup options"))
 
-        for memoryGB in [16, 24] {
+        for memoryGiB in [8] {
             let unsupported = SetupViewModel()
             unsupported.state = .running
-            let reason = "Geer requires at least 32 GB of unified memory; detected \(memoryGB) GB"
+            let reason = "Geer requires at least 16 GiB of unified memory; "
+                + "detected \(memoryGiB) GiB"
             var failure = try JSONSerialization.data(withJSONObject: [
                 "protocol_version": 2, "event": "failed", "code": "SetupError",
                 "message": reason, "recovery_command": "geer setup"

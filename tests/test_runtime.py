@@ -246,6 +246,7 @@ def test_model_settings_apply_context_and_bf16_kv_profile(
 
 
 def test_server_interrupt_exits_without_traceback(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("geer.runtime.verify_assets", lambda workspace: {})
     monkeypatch.setattr("geer.runtime.serve_command", lambda *args: ["omlx", "serve"])
     monkeypatch.setattr("geer.runtime.ensure_model_settings", lambda workspace: {})
 
@@ -516,3 +517,23 @@ def test_runtime_snapshot_keeps_metrics_without_payloads(
     assert "secret_key" not in record
     assert "do-not-record" not in workspace.runtime_metrics.read_text()
     assert workspace.runtime_metrics.stat().st_mode & 0o777 == 0o600
+
+
+def test_stop_reaps_a_backend_started_by_the_same_process(tmp_path, monkeypatch):
+    import subprocess
+    import sys
+
+    from geer import runtime
+    workspace = Workspace(tmp_path)
+    workspace.state.mkdir(parents=True)
+    child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'])
+    workspace.server_pid.write_text(str(child.pid))
+    monkeypatch.setattr(runtime, '_recorded_server_pids', lambda _: [child.pid])
+    monkeypatch.setattr(runtime, '_managed_server_process', lambda *args: True)
+    try:
+        assert stop_server(workspace, timeout=2)['stopped'] is True
+        assert not workspace.server_pid.exists()
+    finally:
+        if child.poll() is None:
+            child.terminate()
+        child.wait()

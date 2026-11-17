@@ -13,6 +13,7 @@ from .assets import (
     AssetError,
     find_workspace,
     initialize_assets,
+    verify_assets,
 )
 from .hardware import UnsupportedHardwareError
 from .models import (
@@ -93,7 +94,9 @@ def parser() -> argparse.ArgumentParser:
     setup_command = commands.add_parser("setup", help="set up Geer on this Mac")
     setup_command.add_argument("--plan", action="store_true")
     setup_command.add_argument("--yes", action="store_true")
-    setup_command.add_argument("--model", metavar="{sage,ornith}", help="choose a model family")
+    setup_command.add_argument(
+        "--model", metavar="{sage,ornith,qwen}", help="choose a model family"
+    )
     setup_command.add_argument("--high-performance-download", action="store_true")
     setup_command.add_argument(
         "--frontend",
@@ -262,9 +265,16 @@ def _print_models(result: dict[str, Any]) -> None:
         labels = [label for key, label in (
             ("recommended", "Recommended"), ("active", "Current"),
             ("installed", "Downloaded and verified"),
-        ) if model[key]]
+            ("experimental", "Experimental"),
+        ) if model.get(key)]
         print(f"{marker} {model['family']} · {model['display_name']}  {', '.join(labels)}")
-        print(f"  {model['model_variant']} · configured context: {model['context_window_human']}")
+        context = (
+            "estimated context cap" if model.get("context_estimated") else "configured context"
+        )
+        variant = model.get("model_variant") or "Unavailable"
+        print(f"  {variant} · {context}: {model['context_window_human']}")
+        if model.get("notes"):
+            print(f"  {model['notes']}")
         print(
             f"  Missing download estimate: {model['download_human']}; "
             f"additional disk: {model['required_free_human']}; "
@@ -413,7 +423,15 @@ def main(arguments: list[str] | None = None) -> int:
         elif options.command == "assets":
             result = initialize_assets(workspace, options.source, options.model_id)
         elif options.command == "runtime":
-            result = bootstrap_runtime(workspace)
+            try:
+                backend = verify_assets(workspace).get("backend")
+            except AssetError:
+                backend = None
+            result = (
+                bootstrap_runtime(workspace, backend="llama.cpp")
+                if backend == "llama.cpp"
+                else bootstrap_runtime(workspace)
+            )
         elif options.command == "serve":
             return run_server(
                 workspace,

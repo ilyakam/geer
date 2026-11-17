@@ -10,6 +10,8 @@ from types import ModuleType
 
 import pytest
 
+from geer.assets import Workspace
+from geer.llama_distribution import llama_distribution_manifest
 from geer.pi_distribution import pi_distribution_manifest
 from geer.t3_distribution import t3_distribution_manifest
 
@@ -167,6 +169,7 @@ def pinned_payload(tmp_path: Path, release_builder: ModuleType) -> Path:
     for name, manifest in (
         ("pi-runtime.json", pi_distribution_manifest()),
         ("t3-desktop.json", t3_distribution_manifest()),
+        ("llama-runtime.json", llama_distribution_manifest(Workspace(ROOT))),
     ):
         (app / name).write_text(json.dumps(manifest))
     return payload
@@ -183,11 +186,16 @@ def test_release_resources_copy_dependency_pins_without_t3_binary(
     resources = payload / release_builder.APP_ROOT
     assert json.loads((resources / "t3-desktop.json").read_text()) == t3_distribution_manifest()
     assert json.loads((resources / "pi-runtime.json").read_text()) == pi_distribution_manifest()
+    assert json.loads((resources / "llama-runtime.json").read_text()) == (
+        llama_distribution_manifest(Workspace(ROOT))
+    )
+    assert (resources / "model-recipes/qwen3.5-9b-q4-k-m.toml").is_file()
+    assert not list(payload.rglob("llama-server"))
     assert not list(payload.rglob("T3*.app"))
     assert not list(payload.rglob("T3-Code-*.zip"))
 
 
-@pytest.mark.parametrize("name", ["pi-runtime.json", "t3-desktop.json"])
+@pytest.mark.parametrize("name", ["pi-runtime.json", "t3-desktop.json", "llama-runtime.json"])
 @pytest.mark.parametrize("failure", ["missing", "version", "extra-field"])
 def test_release_verification_rejects_missing_or_stale_dependency_pin(
     release_builder: ModuleType, pinned_payload: Path, name: str, failure: str

@@ -55,6 +55,28 @@ class JsonSetupFrontend:
         catalog: dict[str, Any],
         comparison: dict[str, Any],
     ) -> str | None:
+        rows = catalog.get("models")
+        if not isinstance(rows, list) or not rows:
+            raise ProtocolError("Geer returned an invalid model chooser")
+        families: set[str] = set()
+        eligible: set[str] = set()
+        for row in rows:
+            if not isinstance(row, dict):
+                raise ProtocolError("Geer returned an invalid model chooser")
+            family = row.get("family")
+            if (
+                not isinstance(family, str)
+                or not family
+                or family in families
+                or type(row.get("eligible")) is not bool
+            ):
+                raise ProtocolError("Geer returned an invalid model chooser")
+            families.add(family)
+            if row["eligible"]:
+                eligible.add(family)
+        selected = catalog.get("selected")
+        if not isinstance(selected, str) or selected not in eligible:
+            raise ProtocolError("Geer returned an invalid model chooser")
         decision_id = str(uuid.uuid4())
         self.emit(
             "model_choice_required",
@@ -62,7 +84,6 @@ class JsonSetupFrontend:
             catalog=catalog,
             comparison=comparison,
         )
-        eligible = {row["family"] for row in catalog["models"] if row["eligible"]}
         choice = self._read_choice(decision_id, eligible | {"cancel"})
         return None if choice == "cancel" else choice
 

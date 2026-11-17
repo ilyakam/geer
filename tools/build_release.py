@@ -17,6 +17,8 @@ import urllib.request
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
+from geer.assets import Workspace
+from geer.llama_distribution import llama_distribution_manifest
 from geer.pi_distribution import pi_distribution_manifest
 from geer.t3_distribution import T3_BUNDLE_NAME, t3_distribution_manifest
 
@@ -96,7 +98,7 @@ def copy_resources(payload: Path) -> None:
         "uv.lock",
     ):
         shutil.copy(ROOT / name, destination / name)
-    for name in ("pi-runtime.json", "t3-desktop.json"):
+    for name in ("pi-runtime.json", "t3-desktop.json", "llama-runtime.json"):
         shutil.copy(ROOT / "packaging" / name, destination / name)
     for name in (
         "model-cards",
@@ -296,6 +298,7 @@ def verify_payload(payload: Path) -> None:
     for name, expected, label in (
         ("pi-runtime.json", pi_distribution_manifest(), "Pi"),
         ("t3-desktop.json", t3_distribution_manifest(), "T3 Code"),
+        ("llama-runtime.json", llama_distribution_manifest(Workspace(ROOT)), "llama.cpp"),
     ):
         try:
             manifest = json.loads((payload / APP_ROOT / name).read_text())

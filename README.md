@@ -8,17 +8,26 @@ Free, private, and open source coding agent that challenges the frontier.
 
 ## At a glance
 
-Geer = [Sage-A1.5 or Ornith 1.5](https://huggingface.co/ilyakam/models) (via [oMLX](https://github.com/jundot/omlx)) + [Pi](https://pi.dev) + [T3 Code](https://t3.codes/)
+Geer = local model + [Pi](https://pi.dev) + [T3 Code](https://t3.codes/)
+
+Experimental Qwen3.5-9B uses official [llama.cpp b11901](https://github.com/ggml-org/llama.cpp/releases/tag/b11901).
+[Sage-A1.5 and Ornith 1.5](https://huggingface.co/ilyakam/models) use
+[oMLX](https://github.com/jundot/omlx). All three connect through T3 Code's native
+Pi driver.
 
 ## Minimum system requirements
 
-- Apple Silicon (M-series chip)
+- Any Apple Silicon M-series chip
 - macOS 15 or newer
-- 32 GiB of unified memory
-- About 35 GB of free disk space for mixed 4/8-bit models, or 42 GB for 6-bit models
+- 16 GiB of unified memory for experimental Qwen; 32 GiB for Sage or Ornith
+- About 10 GB of free disk space for Qwen, 35 GB for mixed 4/8-bit MLX models,
+  or 42 GB for 6-bit MLX models
+
+Memory sizes use GiB, meaning 1,024³ bytes. Apple labels the corresponding Mac
+memory configurations in GB.
 
 Fresh-install disk estimates include dependencies and temporary space. Allow
-more disk space for inference caches or to retain both model families. Setup
+more disk space for inference caches or to retain multiple model families. Setup
 shows the remaining download, additional disk space needed, and total model
 size separately.
 
@@ -30,23 +39,26 @@ To uninstall, run `geer uninstall` and optionally delete `~/.geer`.
 
 ## Model choice
 
-Choose a family once in the initial setup wizard. Sage-A1.5 is recommended,
-and Ornith 1.5 remains a maintained alternative. Geer saves the choice after
+Choose a family in the initial setup wizard. On a fresh installation, setup
+preselects experimental Qwen3.5-9B for Macs with 16 GiB to less than 32 GiB of
+unified memory. At 32 GiB or more, Sage-A1.5 is recommended, Ornith 1.5 remains
+a maintained alternative, and Qwen is optional. Geer saves the choice after
 activation succeeds and retains it on upgrades and reinstalls.
 
 An explicit choice takes priority. Otherwise setup preserves a confirmed,
-eligible choice, then a verified compatible legacy active model. If neither
+eligible choice, then a verified compatible active model. If neither
 exists, setup reuses the sole verified current compatible cached family.
-It selects Sage when both or neither are available.
+With no unique cached choice, it preselects the recommendation for this Mac.
 
 Preview setup or choose a family explicitly:
 
 ```sh
 geer setup --model sage --plan
+geer setup --model qwen --plan
 geer setup --model sage
 ```
 
-Download and verify the other family later without changing your active choice:
+Download and verify another family later without changing your active choice:
 
 ```sh
 geer model list
@@ -54,14 +66,48 @@ geer model add ornith --plan
 geer model add ornith
 ```
 
-Either family works in these commands. `geer model install` and
+All three families, `sage`, `ornith`, and `qwen`, work in these commands.
+`geer model install` and
 `geer model setup` are aliases for the download-only `geer model add`. Remove
 an inactive family with `geer model remove ornith`. Use
 `--high-performance-download` on setup or model add for the higher-resource
 transfer mode on a Mac with at least 64 GiB of unified memory.
 
-Geer chooses the variant and context cap for either family from unified memory.
-Both families retain image inputs in every profile.
+Geer keeps one globally active model and retains model downloads and histories.
+For a deliberate maintenance change, use `geer model use ornith`. Finish the
+current turn and close T3 first, then reopen it afterward. Setup requests
+consent before closing an open T3 app when activation requires it. Activation
+retains the previous model for rollback; selecting the same verified active
+artifact makes no change.
+
+Geer chooses the variant and context cap from unified memory. All three families
+retain image inputs in every profile. K means 1,024 tokens.
+
+### Experimental Qwen3.5-9B
+
+Geer downloads Unsloth's existing Q4_K_M GGUF and full F16 vision projector from
+[this pinned upstream revision](https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/tree/3885219b6810b007914f3a7950a8d1b469d598a5).
+Qwen created the original model, and Unsloth produced the GGUF conversion.
+Geer does not train, distill, or convert this model.
+
+Qwen remains experimental at every memory size.
+
+| Unified memory | Variant | Configured total context cap |
+| --- | --- | --- |
+| 16 GiB to less than 24 GiB | Q4_K_M GGUF + F16 vision | 64K |
+| 24 GiB or more | Q4_K_M GGUF + F16 vision | 128K, estimated |
+
+These total windows include tools, images, history, and a 4,096-token generation
+reserve. The 128K cap comes from a hybrid-cache memory estimate and has not been
+physically qualified on a 24 GiB Mac. Useful context and latency still need
+qualification for each hardware configuration. See the
+[Qwen runtime and context notes](docs/agents-qwen-runtime.md) for the budget
+formula and sources.
+
+### Sage-A1.5 and Ornith 1.5
+
+Both families require at least 32 GiB of unified memory and use the existing
+MLX variants.
 
 | Unified memory | Variant | Configured context cap |
 | --- | --- | --- |
@@ -69,32 +115,24 @@ Both families retain image inputs in every profile.
 | 48 GiB to less than 64 GiB | Mixed 4/8-bit | 128K |
 | 64 GiB or more | 6-bit | 256K |
 
-K means 1,024 tokens. These configured limits do not establish measured useful
-context or physical qualification on every Mac.
+These configured limits do not establish measured useful context or physical
+qualification on every Mac.
 
-Geer keeps one globally active model and retains both downloads and histories.
-For a deliberate maintenance change, use `geer model use ornith`. Finish the
-current turn and close T3 first, then reopen it afterward. Setup requests
-consent before closing an open T3 app when activation requires it. Activation
-retains the previous model for rollback; selecting the same verified active
-artifact makes no change.
+### Published upstream scores
 
-### Selected upstream results
+| Task and benchmark | Sage-A1.5 | Ornith 1.5 | Qwen3.5-9B |
+| --- | ---: | ---: | ---: |
+| Following instructions, IFBench | 81.6% | 44.6% | 64.5% |
+| Reasoning across long documents, AA-LCR | 81.0% | 73.2% | 63.0% |
+| Multi-step tasks with tools, VitaBench | 45.4% | 44.6% | 29.8% |
 
-These percentage scores come from [Sage's upstream comparison, Table 1](https://arxiv.org/html/2610.28578v1#S3.T1).
-They are not scores measured on Geer's quantized models.
+<details>
+<summary>Sources and evaluation settings</summary>
 
-| Benchmark | Ornith 1.5 | Sage-A1.5 |
-| --- | ---: | ---: |
-| SWE-bench Pro, repository issue resolution | 59.6 | 61.2 |
-| IFBench, strict prompt accuracy for instruction following | 44.6 | 81.6 |
-| PinchBench-v1, general agent tasks | 88.6 | 90.0 |
+- Sage-A1.5 & Ornith 1.5: Please see [Sage's upstream comparison, Table 1](https://arxiv.org/html/2610.28578v1#S3.T1)
+- Qwen3.5-9B: Please see the language benchmark table in its [pinned model card](https://huggingface.co/Qwen/Qwen3.5-9B/blob/c202236235762e1c871ad0ccb60c8ee5ba337b9a/README.md#benchmark-results)
 
-IFBench is not a coding benchmark. SWE-bench Pro uses different harnesses and
-context settings for the two models. The full upstream table also includes
-DeepResearchBench II, where Ornith scores 48.6 and Sage scores 43.7 without
-orchestration. See the [methodology and evaluation policy](docs/agents-model-evaluation.md#chooser-comparison)
-for the comparison's limits.
+</details>
 
 ## Troubleshoot
 

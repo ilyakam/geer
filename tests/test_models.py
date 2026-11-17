@@ -182,11 +182,13 @@ def test_both_families_use_the_hardware_selected_recipe(
     assert plan["kv_cache"] == "BF16"
 
 
-def test_fresh_catalog_offers_both_families_and_recommends_sage(inventory):
+def test_fresh_catalog_recommends_sage_and_offers_optional_qwen(inventory):
     catalog = models.model_catalog(inventory.workspace)
     assert catalog["selected"] == "sage"
     assert catalog["selection_source"] == "recommended"
-    assert [value["id"] for value in catalog["models"]] == ["sage", "ornith"]
+    assert [value["id"] for value in catalog["models"]] == ["sage", "ornith", "qwen"]
+    assert row(catalog, "qwen")["eligible"] is True
+    assert row(catalog, "qwen")["recommended"] is False
     assert not inventory.workspace.state.exists()
 
 
@@ -323,14 +325,64 @@ def test_offline_plan_is_an_explicit_estimate_not_an_installation(inventory, mon
     assert plan["installed"] is False
 
 
-def test_unsupported_hardware_marks_both_families_ineligible_and_preserves_state(inventory):
+def test_low_memory_recommends_qwen_and_rejects_oversized_saved_family(inventory):
     inventory.save("ornith")
     catalog = models.model_catalog(inventory.workspace, total_memory_bytes=16 * GIB)
-    assert all(not value["eligible"] for value in catalog["models"])
-    assert all("32 GB" in value["reason"] for value in catalog["models"])
-    with pytest.raises(AssetError, match="32 GB"):
+    assert catalog["selected"] == "qwen"
+    assert row(catalog, "qwen")["eligible"] is True
+    assert all(not row(catalog, family)["eligible"] for family in ("sage", "ornith"))
+    with pytest.raises(AssetError, match="32 GiB"):
         models.install_model(inventory.workspace, family="ornith", total_memory_bytes=16 * GIB)
     assert models._saved_family(inventory.workspace) == "ornith"
+
+
+@pytest.mark.parametrize("memory,context,estimated", [(16, 65_536, False), (24, 131_072, True)])
+def test_low_memory_qwen_catalog_uses_own_backend_context_and_provenance(
+    inventory,
+    monkeypatch,
+    memory,
+    context,
+    estimated,
+):
+    monkeypatch.setattr(
+        "geer.llama_runtime.dependency_plan",
+        lambda _: {
+            "runtime_download_bytes": 123,
+            "runtime_required_free_bytes": 456,
+            "runtime_reusable": False,
+            "runtime_installed_bytes": 333,
+        },
+    )
+    plan = models.model_plan(inventory.workspace, total_memory_bytes=memory * GIB)
+    assert plan["family"] == "qwen"
+    assert plan["backend"] == "llama.cpp"
+    assert plan["format"] == "gguf"
+    assert plan["recommended"] is True
+    assert plan["experimental"] is True
+    assert plan["context_window"] == context
+    assert plan["context_estimated"] is estimated
+    assert plan["context_qualified"] is False
+    assert plan["kv_cache"] == "q4_0"
+    assert plan["input_modalities"] == ["text", "image"]
+    assert plan["runtime_download_bytes"] == 123
+    assert plan["runtime_installed_bytes"] == 333
+    assert "Unsloth" in plan["source_attribution"]
+
+
+def test_confirmed_qwen_choice_is_retained_on_larger_mac(inventory):
+    inventory.save("qwen")
+    catalog = models.model_catalog(inventory.workspace, total_memory_bytes=32 * GIB)
+    assert catalog["selected"] == "qwen"
+    assert catalog["selection_source"] == "saved"
+    assert row(catalog, "sage")["recommended"] is True
+    assert models.model_plan(inventory.workspace, family="sage")["family"] == "sage"
+    assert models._saved_family(inventory.workspace) == "qwen"
+
+
+def test_eight_gib_remains_unsupported_for_every_family(inventory):
+    catalog = models.model_catalog(inventory.workspace, total_memory_bytes=8 * GIB)
+    assert not any(value["eligible"] for value in catalog["models"])
+    assert "16 GiB" in row(catalog, "qwen")["reason"]
 
 
 @pytest.mark.parametrize("family", ("sage", "ornith"))

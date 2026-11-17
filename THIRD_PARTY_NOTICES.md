@@ -16,6 +16,27 @@ The dependency names and versions in generated inventories are informational;
 `uv.lock`, the runtime constants in `src/geer/runtime.py`, and the model
 distribution and download manifests are the canonical immutable inputs.
 
+## Experimental Qwen model and llama.cpp
+
+For experimental lower-memory support, setup downloads the existing
+Qwen3.5-9B Q4_K_M GGUF and full F16 vision projector produced by Unsloth.
+`model-distributions/qwen3.5-9b-q4-k-m.toml` pins both files at
+[`unsloth/Qwen3.5-9B-GGUF@3885219b6810b007914f3a7950a8d1b469d598a5`](https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/tree/3885219b6810b007914f3a7950a8d1b469d598a5).
+The pinned card declares Apache-2.0 and Qwen/Qwen3.5-9B lineage. Geer performs
+no model conversion or training and does not claim authorship of these weights.
+See `model-cards/qwen3.5-9b-q4-k-m/` for license and attribution details.
+
+Setup downloads the official Apple Silicon
+[llama.cpp b11901 release](https://github.com/ggml-org/llama.cpp/releases/tag/b11901),
+source revision `5320c87ff0d994845b44ce7976f10055ec697447`.
+`packaging/llama-runtime.json` pins its archive and complete file inventory.
+The archive is 16,296,203 bytes with SHA-256
+`dde35fc01722157f31af2c3a6e859e971427deb8e65b9e038606fcc9c44ce79c`.
+The runtime preserves the release's MIT license and third-party licenses.
+Its [pinned source license](https://github.com/ggml-org/llama.cpp/blob/5320c87ff0d994845b44ce7976f10055ec697447/LICENSE)
+remains authoritative. The Geer installer carries only the manifest, not this
+runtime binary or model weights.
+
 ## Pi installation
 
 Geer setup downloads Pi 1.4.0 directly from its
