@@ -17,17 +17,53 @@ struct SetupModelOption: Identifiable {
     let requiredSpace: String
     let footprint: String
     let labels: [String]
+    let experimental: Bool
+    let contextEstimated: Bool
+    let notes: String?
+    let sourceAttribution: String?
+    let sourceURL: URL?
+    let supportsImages: Bool
+
+    var contextLabel: String { contextEstimated ? "Estimated context cap" : "Configured context" }
 
     init?(_ row: [String: Any]) {
-        guard let id = row["family"] as? String,
-              let name = row["display_name"] as? String,
-              let eligible = row["eligible"] as? Bool,
+        func boolean(_ value: Any?) -> Bool? {
+            guard let number = value as? NSNumber,
+                  CFGetTypeID(number) == CFBooleanGetTypeID() else { return nil }
+            return number.boolValue
+        }
+        guard let id = row["family"] as? String, !id.isEmpty,
+              let name = row["display_name"] as? String, !name.isEmpty,
+              let eligible = boolean(row["eligible"]),
               let context = row["context_window_human"] as? String,
               let download = row["download_human"] as? String,
               let requiredSpace = row["required_free_human"] as? String,
               let footprint = row["installed_human"] as? String else { return nil }
+        for key in ["experimental", "context_estimated", "recommended", "active", "installed"] {
+            if let value = row[key], boolean(value) == nil { return nil }
+        }
+        for key in ["notes", "source_attribution"] {
+            if let value = row[key], !(value is String) { return nil }
+        }
+        var sourceURL: URL?
+        if let value = row["source_url"] {
+            guard let source = value as? String else { return nil }
+            if !source.isEmpty {
+                guard let url = URL(string: source), url.scheme == "https", url.host != nil
+                else { return nil }
+                sourceURL = url
+            }
+        }
+        var modalities = ["text", "image"]
+        if let value = row["input_modalities"] {
+            guard let values = value as? [String], values.contains("text"),
+                  !values.contains(where: { $0.isEmpty }), Set(values).count == values.count
+            else { return nil }
+            modalities = values
+        }
         let variant = row["model_variant"] as? String
-        guard variant != nil || !eligible else { return nil }
+        if let value = row["model_variant"], !(value is String), !(value is NSNull) { return nil }
+        guard variant?.isEmpty == false || !eligible else { return nil }
         self.id = id
         self.name = name
         self.eligible = eligible
@@ -37,8 +73,15 @@ struct SetupModelOption: Identifiable {
         self.download = download
         self.requiredSpace = requiredSpace
         self.footprint = footprint
+        self.experimental = boolean(row["experimental"]) ?? false
+        self.contextEstimated = boolean(row["context_estimated"]) ?? false
+        self.notes = (row["notes"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+        self.sourceAttribution = (row["source_attribution"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+        self.sourceURL = sourceURL
+        self.supportsImages = modalities.contains("image")
         self.labels = [("recommended", "Recommended"), ("active", "Current"),
-                       ("installed", "Downloaded and verified")].compactMap { key, label in
+                       ("installed", "Downloaded and verified"),
+                       ("experimental", "Experimental")].compactMap { key, label in
             row[key] as? Bool == true ? label : nil
         }
     }
@@ -193,7 +236,7 @@ final class SetupViewModel: ObservableObject {
     @Published var decisionPrompt: String?
     @Published var defaultDecision = "yes"
     @Published var retainedModel = false
-    @Published var modelName = "Choose Sage or Ornith for this Mac"
+    @Published var modelName = "Choose a local model for this Mac"
     @Published var download = "Calculated before download"
     @Published var contextWindow = "Calculated for this Mac"
     @Published var kvCache = "BF16"
@@ -323,7 +366,8 @@ final class SetupViewModel: ObservableObject {
         }
         switch event["event"] as? String {
         case "model_choice_required":
-            guard readCatalog(event), let decisionID = event["decision_id"] as? String else {
+            guard readCatalog(event), selectedModel?.eligible == true,
+                  let decisionID = event["decision_id"] as? String, !decisionID.isEmpty else {
                 fail("Geer returned an invalid model chooser. Reinstall matching versions of Geer and Geer Setup.")
                 return
             }
@@ -401,8 +445,8 @@ final class SetupViewModel: ObservableObject {
               let rawComparison = event["comparison"] as? [String: Any],
               let comparison = SetupBenchmarkComparison(rawComparison) else { return false }
         let models = rows.compactMap(SetupModelOption.init)
-        guard models.count == 2, models.count == rows.count,
-              Set(models.map(\.id)) == Set(["ornith", "sage"]),
+        guard !models.isEmpty, models.count == rows.count,
+              Set(models.map(\.id)).count == models.count,
               models.contains(where: { $0.id == selected }) else { return false }
         modelOptions = models
         selectedFamily = selected
@@ -501,13 +545,20 @@ struct SetupView: View {
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 if let selected = model.selectedModel {
-                    Text("\(selected.variant) · Configured context: \(selected.context) · Images supported")
+                    Text("\(selected.variant) · \(selected.contextLabel): \(selected.context)")
+                    if selected.supportsImages { Text("Images supported") }
+                    if let notes = selected.notes { Text(notes).font(.caption) }
+                    if let attribution = selected.sourceAttribution { Text(attribution).font(.caption) }
+                    if let source = selected.sourceURL { Link("Model source", destination: source).font(.caption) }
                     Text("Missing download estimate: \(selected.download)")
                     Text("Additional disk required: \(selected.requiredSpace) · Full model footprint: \(selected.footprint)")
                 }
-                Text("Context limits depend on available memory.")
+                Text("Context caps use installed unified memory. Useful context varies by Mac.")
                     .font(.caption).foregroundStyle(.secondary)
-                if let comparison = model.comparison {
+                if !["sage", "ornith"].contains(model.selectedFamily) {
+                    Text("Benchmark comparison unavailable for the selected model.")
+                        .font(.caption).foregroundStyle(.secondary)
+                } else if let comparison = model.comparison {
                     Divider()
                     Text(comparison.title).font(.headline)
                     Grid(alignment: .leading, horizontalSpacing: 18, verticalSpacing: 4) {
@@ -565,7 +616,7 @@ struct SetupView: View {
                     VStack(alignment: .leading, spacing: 10) {
                         SetupFeatureRow(text: model.modelName, systemImage: "cpu")
                         SetupFeatureRow(
-                            text: "Model size and context are calculated for this Mac",
+                            text: "Setup selects a model variant and context cap from unified memory",
                             systemImage: "internaldrive"
                         )
                         SetupFeatureRow(
@@ -593,8 +644,14 @@ struct SetupView: View {
                         Spacer()
                         Text("Additional disk: \(model.requiredSpace)")
                     }.font(.caption).foregroundStyle(.secondary)
-                    Text("\(model.modelVariant) · Configured context: \(model.contextWindow) · KV cache: \(model.kvCache)")
+                    Text("\(model.modelVariant) · \(model.selectedModel?.contextLabel ?? "Configured context"): \(model.contextWindow) · KV cache: \(model.kvCache)")
                         .font(.caption).foregroundStyle(.secondary)
+                    if model.selectedModel?.experimental == true {
+                        Text("Experimental").font(.caption)
+                    }
+                    if let notes = model.selectedModel?.notes {
+                        Text(notes).font(.caption).foregroundStyle(.secondary)
+                    }
                     Text("Missing download estimate: \(model.download) · Full model footprint: \(model.modelFootprint)")
                         .font(.caption).foregroundStyle(.secondary)
                 }

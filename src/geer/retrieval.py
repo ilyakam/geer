@@ -159,7 +159,11 @@ def retrieval_canary(workspace: Workspace, fixture: Path | None = None) -> dict[
     if not passed:
         failures = [item["name"] for item in outcomes if not item["passed"]]
         if not incremental["passed"]:
-            failures.append("incremental_update")
+            failures.append(
+                "incremental_update "
+                f"(rank={incremental['rank']}, attempts={incremental['attempts']}, "
+                f"tool_error={incremental['tool_error']})"
+            )
         failed = ", ".join(failures)
         raise AssetError(f"Semble retrieval canary failed: {failed}")
     return record
@@ -194,7 +198,8 @@ async def _incremental_mcp_canary(
                 async with stdio_client(parameters, errlog=errors) as (reader, writer):
                     async with ClientSession(reader, writer) as session:
                         await session.initialize()
-                        await session.call_tool(
+                        warmup_started = time.perf_counter()
+                        warmup = await session.call_tool(
                             "search",
                             {
                                 "query": "callback-v7",
@@ -202,22 +207,19 @@ async def _incremental_mcp_canary(
                                 "top_k": 3,
                             },
                         )
+                        if warmup.isError:
+                            raise AssetError("Semble failed to build the initial canary index")
+                        warmup_seconds = time.perf_counter() - warmup_started
                         changed = repository / "src" / "fresh.py"
                         changed.write_text(
                             "def NEBULA_INCREMENTAL_SENTINEL():\n"
                             '    return "fresh-index-content"\n'
                         )
-                        await asyncio.sleep(0.25)
-                        started = time.perf_counter()
-                        response = await session.call_tool(
-                            "search",
-                            {
-                                "query": "NEBULA_INCREMENTAL_SENTINEL",
-                                "repo": str(repository),
-                                "top_k": 3,
-                            },
+                        # Semble 0.5.2 delays revalidation by three times the
+                        # initial build duration. The warmup bounds that duration.
+                        incremental = await _wait_for_incremental_search(
+                            session, repository, timeout=max(5.0, 3 * warmup_seconds + 1.0)
                         )
-                        latency_ms = (time.perf_counter() - started) * 1000
             except Exception as error:
                 errors.seek(0)
                 detail = errors.read().strip()
@@ -225,20 +227,54 @@ async def _incremental_mcp_canary(
                 if detail:
                     message = f"{message}:\n{detail}"
                 raise AssetError(message) from error
-    payload = json.loads(response.content[0].text)
-    results = payload.get("results", [])
-    rank = next(
-        (
-            number
-            for number, result in enumerate(results, 1)
-            if result.get("file_path") == "src/fresh.py"
-        ),
-        None,
-    )
+    return incremental
+
+
+async def _wait_for_incremental_search(
+    session: Any, repository: Path, *, timeout: float
+) -> dict[str, Any]:
+    started = time.perf_counter()
+    deadline = started + timeout
+    rank = None
+    attempts = 0
+    tool_error = False
+    while time.perf_counter() < deadline:
+        attempts += 1
+        try:
+            response = await asyncio.wait_for(
+                session.call_tool(
+                    "search",
+                    {
+                        "query": "NEBULA_INCREMENTAL_SENTINEL",
+                        "repo": str(repository),
+                        "top_k": 3,
+                    },
+                ),
+                timeout=deadline - time.perf_counter(),
+            )
+        except TimeoutError:
+            break
+        tool_error = bool(response.isError)
+        if tool_error:
+            break
+        results = json.loads(response.content[0].text).get("results", [])
+        rank = next(
+            (
+                number
+                for number, result in enumerate(results, 1)
+                if result.get("file_path") == "src/fresh.py"
+            ),
+            None,
+        )
+        if rank == 1:
+            break
+        await asyncio.sleep(min(0.1, max(0.0, deadline - time.perf_counter())))
     return {
-        "passed": not response.isError and rank == 1,
+        "passed": not tool_error and rank == 1,
         "rank": rank,
-        "latency_ms": round(latency_ms, 3),
+        "attempts": attempts,
+        "tool_error": tool_error,
+        "latency_ms": round((time.perf_counter() - started) * 1000, 3),
     }
 
 

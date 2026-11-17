@@ -17,6 +17,7 @@ from geer.onboarding import (
     choose_model,
     confirm,
     find_pi,
+    human_memory,
     prepare_t3,
     print_welcome,
     setup,
@@ -26,6 +27,11 @@ from geer.t3 import T3Application
 from geer.t3_distribution import T3DistributionError
 
 model_inventory = test_models.inventory
+
+
+@pytest.mark.parametrize("memory_gib", [16, 24, 32, 128])
+def test_memory_display_uses_binary_units(memory_gib) -> None:
+    assert human_memory(memory_gib * 1024**3) == f"{memory_gib} GiB"
 
 
 def test_find_pi_uses_verified_distribution(monkeypatch, tmp_path: Path) -> None:
@@ -182,6 +188,24 @@ def test_setup_requires_t3_before_model_and_migrates_after_canary(
     assert "To add T3 Code later" not in output
 
 
+def test_qwen_setup_prepares_selected_backend_without_mlx_probe(
+    setup_environment, monkeypatch,
+) -> None:
+    workspace, plan, calls = setup_environment
+    plan.update(family="qwen", backend="llama.cpp")
+    backends = []
+
+    def runtime(value, *, backend):
+        backends.append(backend)
+        calls.append("runtime")
+
+    monkeypatch.setattr("geer.onboarding.bootstrap_runtime", runtime)
+    monkeypatch.setattr("geer.onboarding._probe_mlx", lambda *a: pytest.fail("MLX probe"))
+    assert setup(workspace, family="qwen", assume_yes=True)["status"] == "ready"
+    assert backends == ["llama.cpp"]
+    assert calls == ["runtime", "pi", "t3", "model", "retrieval", "canary", "configure"]
+
+
 @pytest.mark.parametrize("family", ["sage", "ornith"])
 def test_wizard_settles_with_real_core_activation_and_same_artifact_repair(
     model_inventory, monkeypatch, family,
@@ -315,7 +339,7 @@ def test_plan_and_cancellation_do_not_acquire_or_mark_ready(setup_environment, m
     assert not workspace.setup_state.exists()
 
 
-@pytest.mark.parametrize("family", ["sage", "ornith"])
+@pytest.mark.parametrize("family", ["sage", "ornith", "qwen"])
 def test_explicit_setup_resolves_family_once_and_preserves_install_identity(
     setup_environment, monkeypatch, family,
 ) -> None:
@@ -455,8 +479,9 @@ def unsupported_setup_environment(tmp_path, monkeypatch):
     return workspace
 
 
-@pytest.mark.parametrize("memory_gib", [16, 24])
-@pytest.mark.parametrize("family", [None, "sage", "ornith"])
+@pytest.mark.parametrize("memory_gib,family", [
+    (8, None), (8, "qwen"), (16, "sage"), (24, "sage"), (16, "ornith"), (24, "ornith"),
+])
 @pytest.mark.parametrize("native", [False, True])
 def test_unsupported_memory_fails_before_model_question_or_acquisition(
     unsupported_setup_environment, monkeypatch, memory_gib, family, native,
@@ -465,7 +490,12 @@ def test_unsupported_memory_fails_before_model_question_or_acquisition(
 
     workspace = unsupported_setup_environment
     monkeypatch.setattr("geer.onboarding.memory_bytes", lambda: memory_gib * 1024**3)
-    reason = f"Geer requires at least 32 GB of unified memory; detected {memory_gib} GB"
+    unavailable = family or "qwen"
+    minimum = 16 if unavailable == "qwen" else 32
+    reason = (
+        f"{unavailable.title()} requires at least {minimum} GiB of unified memory; "
+        f"detected {memory_gib} GiB"
+    )
     output = io.StringIO()
     with pytest.raises(SetupError, match=reason):
         if native:
@@ -483,7 +513,7 @@ def test_unsupported_memory_fails_before_model_question_or_acquisition(
 
 
 @pytest.mark.parametrize("memory_gib", [16, 24])
-@pytest.mark.parametrize("family", [None, "sage", "ornith"])
+@pytest.mark.parametrize("family", ["sage", "ornith"])
 def test_unsupported_memory_plan_retains_diagnostic_catalog_without_questions(
     unsupported_setup_environment, monkeypatch, memory_gib, family,
 ) -> None:
@@ -492,12 +522,53 @@ def test_unsupported_memory_plan_retains_diagnostic_catalog_without_questions(
     result = setup(workspace, family=family, plan_only=True)
     assert result["status"] == "planned"
     assert result["plan"]["eligible"] is False
-    assert result["catalog"]["selected"] == (family or "sage")
-    assert len(result["catalog"]["models"]) == 2
-    assert all(row["eligible"] is False for row in result["catalog"]["models"])
-    assert all(row["model_variant"] is None for row in result["catalog"]["models"])
+    assert result["catalog"]["selected"] == family
+    rows = {row["family"]: row for row in result["catalog"]["models"]}
+    assert set(rows) == {"sage", "ornith", "qwen"}
+    assert rows["qwen"]["eligible"] is True
+    assert all(rows[key]["eligible"] is False for key in ("sage", "ornith"))
     assert str(memory_gib) in result["plan"]["reason"]
     assert not workspace.runtime.exists()
+
+
+@pytest.mark.parametrize("memory_gib,context", [(16, "64K tokens"), (24, "128K tokens")])
+def test_low_memory_setup_uses_normal_chooser_with_qwen_preselected(
+    unsupported_setup_environment, monkeypatch, capsys, memory_gib, context,
+) -> None:
+    from geer import onboarding
+
+    workspace = unsupported_setup_environment
+    monkeypatch.setattr("geer.onboarding.memory_bytes", lambda: memory_gib * 1024**3)
+    shown = []
+
+    def choose(catalog, comparison):
+        shown.append(catalog)
+        return catalog["selected"]
+
+    monkeypatch.setattr("geer.onboarding.choose_model", choose)
+    confirmations = []
+    monkeypatch.setattr(
+        "geer.onboarding.confirm",
+        lambda prompt, **kwargs: confirmations.append(prompt) or False,
+    )
+    assert setup(workspace)["status"] == "cancelled"
+    assert len(shown) == 1
+    assert shown[0]["selected"] == "qwen"
+    rows = {row["family"]: row for row in shown[0]["models"]}
+    assert set(rows) == {"sage", "ornith", "qwen"}
+    assert rows["qwen"]["recommended"] is True
+    assert rows["qwen"]["context_window_human"] == context
+    assert confirmations == ["Continue?"]
+    output = capsys.readouterr().out
+    assert "Experimental" in output
+    context_label = "estimated context cap" if memory_gib >= 24 else "configured context"
+    assert context_label in output
+    assert "Model by Qwen" in output
+    assert "Unsloth" in output
+    assert "Benchmark comparison unavailable" in output
+    assert "SWE-bench Pro: Ornith" not in output
+    assert not workspace.runtime.exists()
+    assert onboarding._ACTIVE_FRONTEND is None
 
 
 @pytest.mark.parametrize("selection_source, explicit_setup, asks", [
@@ -524,13 +595,14 @@ def test_implicit_repair_reuses_saved_family_without_repeating_chooser(
 
 def test_terminal_choice_rejects_ineligible_family_then_accepts_number(monkeypatch) -> None:
     monkeypatch.setattr("geer.onboarding.sys.stdin.isatty", lambda: True)
-    answers = iter(["sage", "2"])
+    answers = iter(["sage", "3"])
     monkeypatch.setattr("builtins.input", lambda prompt: next(answers))
-    catalog = {"selected": "sage", "models": [
+    catalog = {"selected": "qwen", "models": [
         {"family": "sage", "eligible": False, "reason": "Unpublished"},
         {"family": "ornith", "eligible": True},
+        {"family": "qwen", "eligible": True},
     ]}
-    assert choose_model(catalog, {}) == "ornith"
+    assert choose_model(catalog, {}) == "qwen"
 
 
 def test_native_setup_choice_resolves_before_download_and_confirmation(

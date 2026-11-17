@@ -6,8 +6,30 @@ import pytest
 
 from geer import __version__
 from geer.assets import Workspace
-from geer.cli import _confirm_t3_remove, _print_status, main, normalize_arguments, parser
+from geer.cli import (
+    _confirm_t3_remove,
+    _print_models,
+    _print_status,
+    main,
+    normalize_arguments,
+    parser,
+)
 from geer.onboarding import SetupError
+
+
+def test_model_list_shows_experimental_context_estimate(capsys) -> None:
+    _print_models({"models": [{
+        "active": False, "recommended": True, "installed": False,
+        "experimental": True, "context_estimated": True,
+        "family": "qwen", "display_name": "Qwen3.5-9B",
+        "model_variant": "q4-k-m", "context_window_human": "128K tokens",
+        "download_human": "6.1 GiB", "required_free_human": "8.1 GiB",
+        "installed_human": "6.1 GiB", "eligible": True,
+        "notes": "Physical qualification varies by Mac.",
+    }]})
+    output = capsys.readouterr().out
+    assert "Experimental" in output and "estimated context cap: 128K tokens" in output
+    assert "Physical qualification varies by Mac." in output
 
 
 @pytest.mark.parametrize(
@@ -69,7 +91,7 @@ def test_old_native_protocol_is_rejected_explicitly() -> None:
         parser().parse_args(["setup", "--frontend", "json-v1"])
 
 
-@pytest.mark.parametrize("family", ["sage", "ornith"])
+@pytest.mark.parametrize("family", ["sage", "ornith", "qwen"])
 def test_setup_forwards_explicit_family_plan_and_yes(monkeypatch, tmp_path, family) -> None:
     calls = []
     monkeypatch.setattr("geer.cli.find_workspace", lambda: Workspace(tmp_path))

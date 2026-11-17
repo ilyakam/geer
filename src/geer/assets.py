@@ -55,7 +55,9 @@ def model_family(manifest: dict[str, Any]) -> str | None:
     if isinstance(build, dict):
         recipe = build.get("recipe", "")
         if isinstance(recipe, str):
-            for family in ("sage", "ornith"):
+            if recipe == "qwen3.5-9b-q4-k-m":
+                return "qwen"
+            for family in ("sage", "ornith", "qwen"):
                 if recipe.startswith(f"{family}-"):
                     return family
     return None
@@ -194,6 +196,11 @@ def discover_model_files(source: Path) -> list[Path]:
     if not source.is_dir():
         raise AssetError(f"model source is not a directory: {source}")
 
+    from .qwen_distribution import MODEL_FILE, model_files
+
+    if (source / MODEL_FILE).exists():
+        return model_files(source)
+
     missing = sorted(name for name in REQUIRED_FILES if not (source / name).is_file())
     if missing:
         raise AssetError(f"model source is missing required files: {', '.join(missing)}")
@@ -270,9 +277,23 @@ def initialize_assets(
             }
         )
 
-    config = _load_json(source / "config.json")
-    index = _load_json(source / "model.safetensors.index.json")
-    build = _load_json(source / BUILD_MANIFEST)
+    gguf = any(path.suffix == ".gguf" for path in files)
+    if gguf:
+        from .qwen_distribution import MODEL_FILE, PROJECTOR_FILE, asset_metadata
+
+        build = asset_metadata()
+        config = {
+            "architectures": ["Qwen3_5ForConditionalGeneration"],
+            "model_type": "qwen3_5",
+            "vision_config": {"dtype": "float16"},
+            "max_position_embeddings": 262_144,
+            "quantization": {"mode": "Q4_K_M", "vision": "F16"},
+        }
+        index = {"metadata": {"total_size": sum(path.stat().st_size for path in files)}}
+    else:
+        config = _load_json(source / "config.json")
+        index = _load_json(source / "model.safetensors.index.json")
+        build = _load_json(source / BUILD_MANIFEST)
     manifest = {
         "schema_version": 1,
         "created_at": datetime.now(UTC).isoformat(),
@@ -293,6 +314,13 @@ def initialize_assets(
         "build": build,
         "files": entries,
     }
+    if gguf:
+        manifest.update(
+            format="gguf",
+            backend="llama.cpp",
+            model_file=MODEL_FILE,
+            projector_file=PROJECTOR_FILE,
+        )
     temporary = workspace.manifest.with_suffix(".json.tmp")
     temporary.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
     temporary.chmod(0o600)
@@ -338,7 +366,18 @@ def verify_assets(
             raise AssetError(f"asset hash changed: {resolved}")
     # Derive capabilities from the verified model links, including installations
     # whose saved manifest predates input_modalities. Probes never rewrite state.
-    manifest["input_modalities"] = _input_modalities(_load_json(link_root / "config.json"))
+    if manifest.get("format") == "gguf":
+        from .qwen_distribution import MODEL_FILE, PROJECTOR_FILE, model_files
+
+        expected_names = {MODEL_FILE, PROJECTOR_FILE}
+        if {entry["name"] for entry in entries} != expected_names:
+            raise AssetError(
+                "GGUF asset manifest must preserve both model and F16 vision projector"
+            )
+        model_files(link_root)
+        manifest["input_modalities"] = ["text", "image"]
+    else:
+        manifest["input_modalities"] = _input_modalities(_load_json(link_root / "config.json"))
     return manifest
 
 

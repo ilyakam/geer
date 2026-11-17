@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import platform
 import subprocess
 from dataclasses import dataclass
 
@@ -40,20 +41,45 @@ def memory_bytes() -> int:
         return 0
 
 
+def require_qwen_macos() -> None:
+    # The official b11901 arm64 executable and dylibs target macOS 13.3.
+    # Keep pure memory-profile tests usable on non-Mac development hosts.
+    if platform.system() != "Darwin":
+        return
+    version = platform.mac_ver()[0]
+    try:
+        parts = tuple(int(value) for value in version.split(".")[:2])
+    except ValueError:
+        parts = ()
+    if parts < (13, 3):
+        raise UnsupportedHardwareError("Experimental Qwen requires macOS 13.3 or newer")
+
+
 def select_hardware_profile(
     total_memory_bytes: int | None = None,
     *,
     family: str = "sage",
     native_context_window: int = NATIVE_CONTEXT_WINDOW,
 ) -> HardwareProfile:
-    if family not in {"sage", "ornith"}:
+    if family not in {"sage", "ornith", "qwen"}:
         raise ValueError(f"unknown model family: {family!r}")
     detected_memory = memory_bytes() if total_memory_bytes is None else total_memory_bytes
-    if detected_memory < MINIMUM_MEMORY_BYTES:
+    minimum = 16 * GIB if family == "qwen" else MINIMUM_MEMORY_BYTES
+    if detected_memory < minimum:
         detected_gib = detected_memory / GIB
         raise UnsupportedHardwareError(
-            "Geer requires at least 32 GB of unified memory; "
-            f"detected {detected_gib:.0f} GB"
+            f"{family.title()} requires at least {minimum // GIB} GiB of unified memory; "
+            f"detected {detected_gib:.0f} GiB"
+        )
+    if family == "qwen":
+        require_qwen_macos()
+        context = 65_536 if detected_memory < 24 * GIB else 131_072
+        return HardwareProfile(
+            id=f"qwen-q4-k-m-{context // 1024}k",
+            total_memory_bytes=detected_memory,
+            model_variant="q4-k-m",
+            max_context_window=min(native_context_window, context),
+            kv_cache="q4_0",
         )
     if detected_memory >= SIX_BIT_MEMORY_BYTES:
         return HardwareProfile(

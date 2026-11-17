@@ -1,0 +1,26 @@
+schema_version = 1
+id = "qwen3.5-9b-q4-k-m"
+display_name = "Qwen3.5-9B (Q4_K_M GGUF + F16 vision)"
+format = "gguf"
+backend = "llama.cpp"
+experimental = true
+
+[source]
+repo_id = "Qwen/Qwen3.5-9B"
+license = "Apache-2.0"
+license_evidence_url = "https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/blob/3885219b6810b007914f3a7950a8d1b469d598a5/README.md"
+
+[conversion]
+producer = "Unsloth"
+method = "upstream preconverted artifact; Geer performs no conversion"
+
+[quantization]
+mode = "Q4_K_M"
+vision = "F16"
+
+[output]
+expected_architecture = "qwen35"
+preserve_multimodal = true
+context_length = 262144
+model_file = "Qwen3.5-9B-Q4_K_M.gguf"
+projector_file = "mmproj-F16.gguf"
