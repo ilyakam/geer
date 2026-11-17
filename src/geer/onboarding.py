@@ -92,7 +92,7 @@ def human_memory(value: int) -> str:
     if value <= 0:
         return "unknown"
     gib = value / 1024**3
-    return f"{gib:.0f} GB"
+    return f"{gib:.0f} GiB"
 
 
 def _version(command: Path) -> str | None:
@@ -137,22 +137,32 @@ def confirm(prompt: str, *, default_yes: bool, assume_yes: bool) -> bool:
 
 
 def print_model_choices(catalog: dict[str, Any], comparison: dict[str, Any]) -> None:
-    print("\nChoose a local model. Both families support images.")
+    print("\nChoose a local model.")
     for number, row in enumerate(catalog["models"], 1):
         labels = [
             label for key, label in (
                 ("recommended", "Recommended"),
                 ("active", "Current"),
                 ("installed", "Downloaded and verified"),
-            ) if row[key]
+                ("experimental", "Experimental"),
+            ) if row.get(key, False)
         ]
         selected = " [selected]" if row["family"] == catalog["selected"] else ""
         print(f"  {number}. {row['display_name']}{selected}")
         if labels:
             print(f"     {', '.join(labels)}")
-        print(
-            f"     {row['model_variant']} · configured context: {row['context_window_human']}"
+        context_label = (
+            "estimated context cap" if row.get("context_estimated") else "configured context"
         )
+        variant = row.get("model_variant") or "Unavailable"
+        print(f"     {variant} · {context_label}: {row['context_window_human']}")
+        if "image" in row.get("input_modalities", ["text", "image"]):
+            print("     Images supported")
+        for field in ("notes", "source_attribution"):
+            if row.get(field):
+                print(f"     {row[field]}")
+        if row.get("source_url"):
+            print(f"     Source: {row['source_url']}")
         print(
             f"     Missing download estimate: {row['download_human']}; "
             f"additional disk: {row['required_free_human']}; "
@@ -160,7 +170,10 @@ def print_model_choices(catalog: dict[str, Any], comparison: dict[str, Any]) -> 
         )
         if not row["eligible"]:
             print(f"     Unavailable: {row['reason']}")
-    print("Context limits depend on available memory.\n")
+    print("Context caps use installed unified memory. Useful context varies by Mac.\n")
+    if catalog["selected"] not in {"sage", "ornith"}:
+        print("Benchmark comparison unavailable for the selected model.\n")
+        return
     print(comparison["title"])
     for row in comparison["rows"]:
         print(f"  {row['label']}: Ornith {row['ornith']} · Sage {row['sage']}")
@@ -231,7 +244,13 @@ def print_welcome(
     if "model_variant" in plan:
         print(f"Model variant:          {plan['model_variant']}")
     if "context_window_human" in plan:
-        print(f"Configured context:     {plan['context_window_human']}")
+        label = "Estimated context cap" if plan.get("context_estimated") else "Configured context"
+        print(f"{label}:     {plan['context_window_human']}")
+    if plan.get("experimental"):
+        print("Status:                 Experimental")
+    for field in ("notes", "source_attribution"):
+        if plan.get(field):
+            print(plan[field])
     if "kv_cache" in plan:
         print(f"KV cache:               {plan['kv_cache']}")
     print("Model and runtimes:     ~/.geer")
@@ -443,10 +462,14 @@ def _prepare_and_validate(
 ) -> dict[str, Any]:
     _phase("runtime", "Preparing Geer, Pi, and T3 Code", 1, 5)
     print("\nPreparing Geer, Pi, and T3 Code")
-    bootstrap_runtime(workspace)
+    if plan.get("backend") == "llama.cpp":
+        bootstrap_runtime(workspace, backend="llama.cpp")
+    else:
+        bootstrap_runtime(workspace)
     print("  ✓ Installed the Geer runtime")
-    _probe_mlx(workspace)
-    print("  ✓ Verified MLX acceleration")
+    if plan.get("backend") != "llama.cpp":
+        _probe_mlx(workspace)
+        print("  ✓ Verified MLX acceleration")
     bootstrap_pi(workspace)
     print("  ✓ Installed and verified the Pi harness")
     prepare_t3(workspace)

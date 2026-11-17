@@ -6,8 +6,8 @@ this file for implementation guidance.
 
 ## Code map
 
-Geer connects T3 Code's native `pi` driver directly to Pi RPC. Pi uses the local
-oMLX engine for inference and Semble over MCP for repository retrieval.
+Geer connects T3 Code's native `pi` driver directly to Pi RPC. Pi uses local
+oMLX or llama.cpp inference and Semble over MCP for repository retrieval.
 
 - `src/geer/` is the Python package, managed with `uv`.
 - `src/geer/onboarding.py` owns setup and the terminal interface.
@@ -16,7 +16,7 @@ oMLX engine for inference and Semble over MCP for repository retrieval.
 - `src/geer/pi_native.py` separates native discovery, tool-free background
   generation, and Full access chats. `geer launch` dispatches `--mode rpc` to
   it and retains ACP arguments through `src/geer/pi_acp.py` for recovery.
-- `src/geer/models.py` owns the two-family chooser policy. Terminal and native
+- `src/geer/models.py` owns the model-family chooser policy. Terminal and native
   setup consume its catalog and `src/geer/model_benchmarks.py` display metadata.
 - `tools/build_release.py` builds the frozen CLI and macOS installer;
   `tools/build_runtime.py` builds the pinned oMLX runtime.
@@ -39,7 +39,7 @@ Confirm the existing Keychain profile with the read-only command
 
 Choose the best practical local model and variant for each Mac's chip and
 unified memory. The target covers all M-series configurations with at least
-16 GB, including M1 through M6 and configurations up to 512 GB. Exclude 8 GB
+16 GiB, including M1 through M6 and configurations up to 512 GiB. Exclude 8 GiB
 machines for now. This is a qualification goal; current support still follows
 the implementation and measured evidence.
 
@@ -62,19 +62,26 @@ when measured results establish a better fit and the compatibility checks in
 CONTRIBUTING.md prove the migration and recovery path. Keep model and runtime
 selection specific to the hardware configuration.
 
-The initial setup/installation chooser supports Sage-A1.5 and Ornith 1.5,
-with Sage recommended. Retain the confirmed choice on upgrades and reinstalls.
+The installation chooser supports Sage-A1.5, Ornith 1.5, and experimental
+Qwen3.5-9B. Recommend Qwen below 32 GiB and Sage from 32 GiB; Qwen remains
+optional on larger Macs. Retain confirmed eligible choices on reinstalls.
 Resolve an explicit family first, then a saved confirmed eligible choice,
 then a verified compatible legacy active model, then the sole verified
-exact-current hardware-compatible cached family. Choose Sage when both or
-neither qualify. Save the choice only after successful activation. Automatic
+exact-current hardware-compatible cached family. Otherwise use the hardware
+recommendation. Save the choice only after successful activation. Automatic
 reuse requires full verification of the approved artifact and variant;
 candidate directories, stale revisions, and corrupt snapshots do not qualify.
 
-Keep the chooser's 32 GiB minimum and configured caps for both families.
+Keep the 32 GiB minimum and configured caps for Sage and Ornith.
 Mixed 4/8-bit uses 64K below 48 GiB and 128K below 64 GiB; 6-bit uses 256K at
 64 GiB or more. These caps are configuration, not physical qualification.
 Variant aliases must pass the same hardware checks as family selections.
+
+Qwen requires at least 16 GiB, preserves full F16 vision, and uses llama.cpp.
+Configure 64K total context below 24 GiB and an estimated 128K from 24 GiB.
+These are experimental caps, not physical qualification. Read
+[the Qwen runtime notes](docs/agents-qwen-runtime.md) before changing its pins,
+runtime, or context policy.
 
 Keep one globally active model. Switch families between turns through the
 existing close/reopen T3 flow and explicit quit consent. Preserve downloads,

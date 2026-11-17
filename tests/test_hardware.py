@@ -57,7 +57,7 @@ def test_profile_never_exceeds_the_model_context_window() -> None:
 
 @pytest.mark.parametrize("memory_gib", (0, 16, 24, 31))
 def test_less_than_32_gib_is_rejected(memory_gib: int) -> None:
-    with pytest.raises(UnsupportedHardwareError, match="at least 32 GB"):
+    with pytest.raises(UnsupportedHardwareError, match="at least 32 GiB"):
         select_hardware_profile(memory_gib * GIB)
 
 
@@ -81,3 +81,43 @@ def test_ornith_keeps_its_family_identity_and_matches_sage_caps(memory_gib: int)
 def test_unknown_hardware_family_is_rejected() -> None:
     with pytest.raises(ValueError, match="unknown model family"):
         select_hardware_profile(128 * GIB, family="third-model")
+
+
+@pytest.mark.parametrize(
+    "memory_gib,context", [(16, 65_536), (24, 131_072), (32, 131_072), (512, 131_072)]
+)
+def test_qwen_profile_preserves_full_vision_and_estimated_context(memory_gib, context):
+    profile = select_hardware_profile(memory_gib * GIB, family="qwen")
+    assert profile.model_variant == "q4-k-m"
+    assert profile.max_context_window == context
+    assert profile.kv_cache == "q4_0"
+
+
+@pytest.mark.parametrize("memory_gib", [0, 8, 15])
+def test_qwen_rejects_less_than_16_gib(memory_gib):
+    with pytest.raises(UnsupportedHardwareError, match="at least 16 GiB"):
+        select_hardware_profile(memory_gib * GIB, family="qwen")
+
+
+def test_qwen_cap_respects_native_context_limit():
+    assert (
+        select_hardware_profile(
+            24 * GIB,
+            family="qwen",
+            native_context_window=32_768,
+        ).max_context_window
+        == 32_768
+    )
+
+
+@pytest.mark.parametrize('version,allowed', [('13.0', False), ('13.2.1', False),
+                                           ('13.3', True), ('15.8.1', True)])
+def test_qwen_requires_runtime_minimum_macos(monkeypatch, version, allowed):
+    monkeypatch.setattr('geer.hardware.platform.system', lambda: 'Darwin')
+    monkeypatch.setattr('geer.hardware.platform.mac_ver', lambda: (version, (), ''))
+    if allowed:
+        assert select_hardware_profile(16 * GIB, family='qwen').model_variant == 'q4-k-m'
+    else:
+        with pytest.raises(UnsupportedHardwareError, match='macOS 13.3'):
+            select_hardware_profile(16 * GIB, family='qwen')
+    assert select_hardware_profile(32 * GIB, family='sage').model_variant == '4-8bit'

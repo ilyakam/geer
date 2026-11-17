@@ -8,6 +8,7 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any
 
+from . import hardware
 from .assets import (
     DEFAULT_MODEL_ID,
     AssetError,
@@ -17,7 +18,12 @@ from .assets import (
     initialize_assets,
     verify_assets,
 )
-from .hardware import HardwareProfile, UnsupportedHardwareError, select_hardware_profile
+from .hardware import (
+    GIB,
+    HardwareProfile,
+    UnsupportedHardwareError,
+    select_hardware_profile,
+)
 from .pi_distribution import (
     PI_ARCHIVE_BYTES,
     PI_ARCHIVE_SHA256,
@@ -43,7 +49,11 @@ from .runtime import (
 from .t3 import find_t3, running_t3_applications
 from .t3_distribution import T3_ARCHIVE_BYTES, T3_INSTALLED_BYTES
 
-MODEL_FAMILIES = {"sage": "sage-a1.5-35b", "ornith": "ornith-1.5-35b"}
+MODEL_FAMILIES = {
+    "sage": "sage-a1.5-35b",
+    "ornith": "ornith-1.5-35b",
+    "qwen": "qwen3.5-9b",
+}
 TEMPORARY_SPACE_BYTES = 2 * 1024**3
 # Only successful full checks are reused, and only while every file's identity
 # and modification metadata match. Nothing is persisted or trusted by pathname.
@@ -62,9 +72,13 @@ def load_model_build(workspace: Workspace) -> ModuleType:
 
 
 def _model_name(value: str) -> tuple[str, str | None]:
+    if value in {"qwen3.5-9b-q4-k-m", "unsloth/Qwen3.5-9B-GGUF"}:
+        return "qwen", "q4-k-m"
     for family, prefix in MODEL_FAMILIES.items():
         if value == family:
             return family, None
+        if family == "qwen":
+            continue
         label = "Sage-A1.5" if family == "sage" else "Ornith 1.5"
         repo_label = "Sage-A1.5" if family == "sage" else "Ornith-1.5"
         for variant, bits in (("6bit", "6-bit"), ("4-8bit", "4/8-bit")):
@@ -87,7 +101,10 @@ def recipe_and_installer(
     *,
     family: str = "sage",
 ) -> tuple[Any, ModuleType]:
-    installer = load_model_build(workspace)
+    if family == "qwen":
+        from . import qwen_distribution as installer
+    else:
+        installer = load_model_build(workspace)
     recipe = installer.load_recipe(
         workspace.root
         / "model-recipes"
@@ -170,6 +187,10 @@ def _legacy_active_family(
     snapshot = active.resolve()
     for row in rows:
         if not row["eligible"]:
+            continue
+        # Qwen has no legacy Geer conversions. Only the exact approved upstream
+        # cache snapshot qualifies for automatic reuse.
+        if row["family"] == "qwen":
             continue
         recipe = installer.load_recipe(
             workspace.root
@@ -296,35 +317,39 @@ def _catalog(workspace: Workspace, total_memory_bytes: int | None) -> dict[str, 
     cache = workspace.cache / "huggingface"
     active = workspace.models / "active"
     installer = load_model_build(workspace)
-    dependencies = _dependency_plan(workspace)
-    # Detect once so both rows describe the same hardware inventory.
-    try:
-        detected = select_hardware_profile(total_memory_bytes)
-    except UnsupportedHardwareError as error:
-        detected = None
-        hardware_error = str(error)
+    common_dependencies = _dependency_plan(workspace)
+    detected_memory = hardware.memory_bytes() if total_memory_bytes is None else total_memory_bytes
     for family, prefix in MODEL_FAMILIES.items():
-        profile = (
-            select_hardware_profile(detected.total_memory_bytes, family=family)
-            if detected
-            else None
-        )
+        try:
+            profile = select_hardware_profile(detected_memory, family=family)
+            hardware_error = None
+        except UnsupportedHardwareError as error:
+            profile = None
+            hardware_error = str(error)
+        dependencies = dict(common_dependencies)
+        family_installer = installer
+        if family == "qwen":
+            from . import qwen_distribution as family_installer
+            from .llama_runtime import dependency_plan
+
+            dependencies.update(dependency_plan(workspace))
         variant = profile.model_variant if profile else None
-        recipe = installer.load_recipe(
-            workspace.root / "model-recipes" / (f"{prefix}-{variant or '4-8bit'}.toml")
+        fallback_variant = "q4-k-m" if family == "qwen" else "4-8bit"
+        recipe = family_installer.load_recipe(
+            workspace.root / "model-recipes" / (f"{prefix}-{variant or fallback_variant}.toml")
         )
         eligible = profile is not None
         reason = None if eligible else hardware_error
         distribution = recipe.distribution
         try:
-            revision = installer.distribution_revision(recipe)
+            revision = family_installer.distribution_revision(recipe)
             installed_bytes = int(distribution["expected_bytes"])
         except (RuntimeError, ValueError, KeyError, TypeError):
             revision = None
             installed_bytes = 0
             eligible = False
             reason = "This model's approved distribution is not published yet."
-        snapshot = _verified_snapshot(installer, recipe, cache) if eligible else None
+        snapshot = _verified_snapshot(family_installer, recipe, cache) if eligible else None
         installed = snapshot is not None
         is_active = bool(
             installed and active.is_symlink() and active.resolve() == snapshot.resolve()
@@ -333,7 +358,7 @@ def _catalog(workspace: Workspace, total_memory_bytes: int | None) -> dict[str, 
         estimated = not installed
         if eligible and not installed:
             try:
-                download_plan = installer.published_install_plan(recipe, cache)
+                download_plan = family_installer.published_install_plan(recipe, cache)
                 download_bytes = int(download_plan["download_bytes"])
                 estimated = bool(download_plan.get("download_estimated", False))
                 if download_bytes == 0:
@@ -344,7 +369,7 @@ def _catalog(workspace: Workspace, total_memory_bytes: int | None) -> dict[str, 
                 # never treats remote availability as a verified installation.
                 pass
         temporary_bytes = (
-            0 if installed else max(TEMPORARY_SPACE_BYTES, installer.SAFETY_MARGIN_BYTES)
+            0 if installed else max(TEMPORARY_SPACE_BYTES, family_installer.SAFETY_MARGIN_BYTES)
         )
         required_free = (
             download_bytes
@@ -356,7 +381,7 @@ def _catalog(workspace: Workspace, total_memory_bytes: int | None) -> dict[str, 
             "family": family,
             "profile": family,
             "display_name": str(recipe.data["display_name"]),
-            "recommended": family == "sage",
+            "recommended": family == ("qwen" if detected_memory < 32 * GIB else "sage"),
             "eligible": eligible,
             "reason": reason,
             "installed": installed,
@@ -378,6 +403,22 @@ def _catalog(workspace: Workspace, total_memory_bytes: int | None) -> dict[str, 
             "active_link": str(active),
             "snapshot": str(snapshot) if snapshot else None,
             "temporary_note": "Conservative estimate for additional temporary space.",
+            "format": "gguf" if family == "qwen" else "mlx",
+            "backend": "llama.cpp" if family == "qwen" else "omlx",
+            "experimental": family == "qwen",
+            "context_estimated": family == "qwen" and detected_memory >= 24 * GIB,
+            "context_qualified": False,
+            "input_modalities": ["text", "image"],
+            "notes": (
+                "Experimental support. Context limits are estimates; this configuration "
+                "is not qualified on every supported Mac. Includes the full F16 vision projector."
+                if family == "qwen"
+                else "Configured context cap; physical qualification varies by Mac."
+            ),
+            "source_attribution": (
+                "Model by Qwen. GGUF conversion by Unsloth." if family == "qwen" else ""
+            ),
+            "source_url": distribution.get("source_url", ""),
             **dependencies,
         }
         for key, count in {
@@ -386,14 +427,16 @@ def _catalog(workspace: Workspace, total_memory_bytes: int | None) -> dict[str, 
             "required_free": required_free,
             "temporary": temporary_bytes,
             "runtime_download": dependencies["runtime_download_bytes"],
-            "runtime_installed": RUNTIME_INSTALLED_BYTES,
+            "runtime_installed": dependencies.get(
+                "runtime_installed_bytes", RUNTIME_INSTALLED_BYTES
+            ),
             "pi_download": dependencies["pi_download_bytes"],
             "pi_installed": PI_EXTRACTED_BYTES,
             "t3_download": dependencies["t3_download_bytes"],
             "t3_installed": T3_INSTALLED_BYTES,
         }.items():
             row[f"{key}_bytes"] = count
-            row[f"{key}_human"] = installer.human_bytes(count)
+            row[f"{key}_human"] = family_installer.human_bytes(count)
         row.update(name=row["display_name"], download=row["download_human"])
         rows.append(row)
     saved = _saved_family(workspace)
@@ -413,7 +456,7 @@ def _catalog(workspace: Workspace, total_memory_bytes: int | None) -> dict[str, 
         selected = cached_rows[0]["family"]
         selection_source = "cached"
     else:
-        selected = "sage"
+        selected = "qwen" if detected_memory < 32 * GIB else "sage"
         selection_source = "recommended"
     return {"selected": selected, "selection_source": selection_source, "models": rows}
 
@@ -545,9 +588,19 @@ def _activate(
         if changing_active:
             stop_server(workspace)
         try:
-            activation = installer.activate_snapshot(snapshot, home=workspace.runtime)
+            activation_installer = (
+                load_model_build(workspace) if plan["family"] == "qwen" else installer
+            )
+            activation = activation_installer.activate_snapshot(snapshot, home=workspace.runtime)
             assets = initialize_assets(workspace, snapshot, DEFAULT_MODEL_ID)
-            settings = ensure_model_settings(workspace, total_memory_bytes=total_memory_bytes)
+            if plan["family"] == "qwen":
+                from .llama_runtime import ensure_model_settings as ensure_llama_model_settings
+
+                settings = ensure_llama_model_settings(
+                    workspace, total_memory_bytes=total_memory_bytes
+                )
+            else:
+                settings = ensure_model_settings(workspace, total_memory_bytes=total_memory_bytes)
             _confirm_choice(workspace, plan["family"])
         except Exception:
             _restore_paths(workspace, backup)

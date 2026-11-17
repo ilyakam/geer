@@ -106,6 +106,11 @@ development. Record the resulting archive's exact byte count and SHA-256 in
 twice from clean temporary directories and require identical SHA-256 digests
 before publication.
 
+Experimental Qwen uses the official pinned llama.cpp binary rather than that
+oMLX archive. It requires macOS 13.3 or newer, including during source
+development. See [the runtime notes](docs/agents-qwen-runtime.md) for its pins,
+memory estimates, and validation requirements.
+
 The reviewed model is exposed through a read-only link at
 `~/.geer/models/active`. Never commit model weights or modify a pinned snapshot
 in the shared Hugging Face cache. Model publication must use the reviewed,
@@ -203,7 +208,7 @@ uv run --script tools/model_build.py convert
 uv run --script tools/model_build.py verify
 ```
 
-On a machine with at least 64 GB of unified memory, the download can use
+On a machine with at least 64 GiB of unified memory, the download can use
 Hugging Face Xet's higher-resource transfer mode:
 
 ```sh

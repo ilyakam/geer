@@ -1205,7 +1205,7 @@ def parser() -> argparse.ArgumentParser:
         "--high-performance-download",
         dest="high_performance_transfer",
         action="store_true",
-        help="let Xet use more CPU, memory, and bandwidth (64 GB+ Macs)",
+        help="let Xet use more CPU, memory, and bandwidth (64 GiB+ Macs)",
     )
     subcommands = command.add_subparsers(dest="command", required=True)
     subcommands.add_parser("plan", help="show paths, revisions, and expected sizes")
